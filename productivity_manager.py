@@ -1,18 +1,21 @@
 """
 CodingCat - Productivity Manager
-Monitors keyboard activity, IDE presence, and manages Pomodoro timer.
+
+Simple activity tracking:
+- Keyboard activity → CODE state
+- IDE active → CODE state  
+- 10+ seconds inactivity → SLEEP state
 """
 from __future__ import annotations
 import time
-import threading
 from collections import deque
-from typing import Optional, Callable, Deque
+from typing import Optional, Deque
 import psutil
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from config import (
-    IDE_PROCESSES, FOCUS_THRESHOLD_WPM, ACTIVE_THRESHOLD_WPM,
-    INACTIVITY_IDLE_SECS, INACTIVITY_SLEEP_SECS,
-    POMODORO_WORK_MINS, POMODORO_BREAK_MINS, TYPING_WINDOW_SECS,
+    IDE_PROCESSES, ACTIVE_THRESHOLD_WPM,
+    INACTIVITY_SLEEP_SECS, TYPING_WINDOW_SECS,
+    POMODORO_WORK_MINS, POMODORO_BREAK_MINS,
 )
 from state_manager import CatState
 from storage import log_session, increment_keystrokes
@@ -26,8 +29,11 @@ except Exception:
 
 class ProductivityManager(QObject):
     """
-    Emits signals when the desired cat state should change.
-    Runs keyboard listener in a background thread.
+    Simple activity monitoring for cat behavior.
+    Emits state changes based on:
+    - IDE active or typing → CODE
+    - 10+ seconds inactivity → SLEEP
+    - Otherwise → None (allows IDLE/WALK)
     """
     state_changed   = pyqtSignal(object)        # Optional[CatState]
     pomodoro_tick   = pyqtSignal(int, int, str)  # remaining_secs, total_secs, phase
@@ -111,7 +117,7 @@ class ProductivityManager(QObject):
         wpm = self._wpm_estimate()
         self._ide_active = self._check_ide()
 
-        # Pomodoro logic
+        # Pomodoro logic (highest priority)
         if self._pomo_running:
             remaining = max(0, int(self._pomo_end - now))
             total = self._pomo_work_secs if self._pomo_phase == "work" else self._pomo_break_secs
@@ -122,7 +128,7 @@ class ProductivityManager(QObject):
                     log_session("pomodoro_work", self._pomo_work_secs)
                     self._pomo_phase = "break"
                     self._pomo_end = now + self._pomo_break_secs
-                    new_state = CatState.TASK
+                    new_state = CatState.IDLE
                 else:
                     log_session("pomodoro_break", self._pomo_break_secs)
                     self._pomo_phase = "work"
@@ -131,19 +137,20 @@ class ProductivityManager(QObject):
                 self._emit_state(new_state)
                 return
             else:
-                pomo_state = CatState.CODE if self._pomo_phase == "work" else CatState.BREAK
+                pomo_state = CatState.CODE if self._pomo_phase == "work" else CatState.IDLE
                 self._emit_state(pomo_state)
                 return
 
-        # Non-pomodoro productivity
-        if idle_secs > INACTIVITY_SLEEP_SECS:
+        # Simple state logic
+        # Priority: CODE > SLEEP > IDLE/WALK
+        
+        # 10+ seconds inactivity → SLEEP
+        if idle_secs >= INACTIVITY_SLEEP_SECS:
             self._emit_state(CatState.SLEEP)
-        elif idle_secs > INACTIVITY_IDLE_SECS:
-            self._emit_state(None)
-        elif wpm >= FOCUS_THRESHOLD_WPM:
-            self._emit_state(CatState.FOCUS)
-        elif wpm >= ACTIVE_THRESHOLD_WPM or self._ide_active:
+        # IDE active or typing → CODE
+        elif self._ide_active or wpm >= ACTIVE_THRESHOLD_WPM:
             self._emit_state(CatState.CODE)
+        # Otherwise → None (allows IDLE/WALK/JUMP)
         else:
             self._emit_state(None)
 

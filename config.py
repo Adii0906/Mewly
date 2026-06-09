@@ -1,7 +1,8 @@
 """
 CodingCat - Configuration
-Sprite layout uses per-state (x_start, slot_w, num_frames, row_y, row_h)
-derived from pixel-level analysis of the actual sprite sheets.
+
+A simple, natural companion cat behavior system.
+States: CODE (typing), IDLE (present), WALK (occasional), SLEEP (inactive)
 """
 from __future__ import annotations
 from dataclasses import dataclass
@@ -29,15 +30,18 @@ PROB_START_WALKING:   float = 0.008
 PROB_SLEEP_FROM_IDLE: float = 0.003
 PROB_JUMP:            float = 0.002
 
-# ── Productivity ──────────────────────────────────────────────────────────────
-TYPING_WINDOW_SECS:    int = 5
-FOCUS_THRESHOLD_WPM:   int = 30
-ACTIVE_THRESHOLD_WPM:  int = 5
-INACTIVITY_IDLE_SECS:  int = 30
-INACTIVITY_SLEEP_SECS: int = 120
+# ── Activity Detection ────────────────────────────────────────────────────
+# Keyboard and IDE tracking for simple state determination
+TYPING_WINDOW_SECS:    int = 5      # Window for WPM calculation
+ACTIVE_THRESHOLD_WPM:  int = 1      # Any typing = active
+INACTIVITY_SLEEP_SECS: int = 10     # Sleep after 10 seconds of inactivity
+
+# IDEs that indicate "coding" activity
+IDE_PROCESSES: List[str] = ["code", "cursor", "windsurf", "code - insiders"]
+
+# Pomodoro configuration
 POMODORO_WORK_MINS:    int = 25
 POMODORO_BREAK_MINS:   int = 5
-IDE_PROCESSES: List[str] = ["code", "cursor", "windsurf", "code - insiders"]
 
 # ── Sprite layout ─────────────────────────────────────────────────────────────
 # Measured pixel-accurately from the actual sprite sheets.
@@ -89,17 +93,17 @@ STATE_FALLBACK: Dict[str, str] = {
     "stretch": "idle",
     "groom":   "idle",
     "blink":   "idle",
+    "focus":   "code",
+    "task":    "jump",
+    "break":   "idle",
+    "debug":   "code",
 }
 
-# Animation speed (FPS) per state
+# Animation speed (FPS) per state — calm and natural
 STATE_FPS_OVERRIDE: Dict[str, int] = {
-    "walk":   10,
-    "jump":   12,
-    "focus":   6,
-    "sleep":   4,
-    "task":    7,
-    "debug":   8,
-    "break":   6,
-    "code":    7,
-    "idle":    6,
+    "idle":   6,    # Calm, relaxed
+    "sleep":  4,    # Slow and peaceful
+    "walk":   8,    # Natural pace
+    "code":   7,    # Attentive but calm
+    "jump":   10,   # Quick burst
 }

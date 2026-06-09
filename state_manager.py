@@ -1,11 +1,13 @@
 """
-CodingCat - State Manager  (v2)
+CodingCat - State Manager
 
-Fixes:
-- force_state() now IMMEDIATELY transitions without waiting for can_transition().
-- Productivity state overrides are respected strictly; movement state can only
-  win when no productivity override is active.
-- Added full debug logging on every transition.
+Simple state machine with four states:
+- CODE: IDE active or typing
+- IDLE: User present but not coding
+- WALK: Occasional movement during IDLE
+- SLEEP: After 10+ seconds of inactivity
+
+Priority: CODE > SLEEP > WALK > IDLE
 """
 from __future__ import annotations
 import logging
@@ -38,16 +40,18 @@ STATIONARY_STATES = {
     CatState.LOAF,  CatState.STRETCH, CatState.GROOM,
 }
 
-# Minimum ticks before we allow leaving a state
+# Minimum ticks before leaving a state (at ~8 FPS default)
 STATE_MIN_TICKS: dict[CatState, int] = {
-    CatState.SLEEP:  80,
-    CatState.JUMP:   12,
-    CatState.TASK:   30,
-    CatState.DEBUG:  30,
-    CatState.BREAK:  50,
-    CatState.CODE:   20,
-    CatState.FOCUS:  20,
-    CatState.WALK:    8,
+    CatState.CODE:   32,   # ~4 seconds minimum
+    CatState.IDLE:   24,   # ~3 seconds minimum
+    CatState.WALK:   16,   # ~2 seconds minimum
+    CatState.SLEEP:  40,   # ~5 seconds minimum (can't wake too fast)
+    CatState.JUMP:   8,    # ~1 second
+    # Virtual states
+    CatState.LOAF:   24,
+    CatState.STRETCH: 24,
+    CatState.GROOM:  24,
+    CatState.BLINK:  8,
 }
 
 
@@ -62,6 +66,7 @@ class StateManager:
         self._forced_remaining: int = 0
         self._productivity: Optional[CatState] = None
         self._on_change = on_state_change
+        log.info("StateManager initialized — starting state: %s", self._state.value)
 
     # ── Public ────────────────────────────────────────────────────
 

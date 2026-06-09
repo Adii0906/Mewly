@@ -1,0 +1,30 @@
+# Python environment
+myenv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# PyInstaller
+*.manifest
+*.spec
+
+# IDE/editor files
+.vscode/
+.DS_Store
+
+# Logs and database
+*.log
+*.sqlite3
+
+# Generated assets
+*.pyc
+*.pyo
+*.pyd

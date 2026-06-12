@@ -71,12 +71,14 @@ class CodingCatApp:
             fps=cfg.fps,
         )
         self._cat.right_clicked.connect(self._show_context_menu)
+        self._cat.exit_requested.connect(self._quit)
 
         # Restore last position BEFORE show()
         self._cat.move(cfg.pos_x, cfg.pos_y)
         self._move_mgr.set_position(cfg.pos_x, cfg.pos_y)
         self._cat.set_always_on_top(cfg.always_on_top)
         self._cat.show()
+        self._cat.show_reaction("Right click cat to Exit")
         log.info("Cat window shown at (%d, %d)", cfg.pos_x, cfg.pos_y)
 
         # ── System tray ───────────────────────────────────────────
@@ -89,6 +91,7 @@ class CodingCatApp:
             on_trigger_task      = self.trigger_task_completed,
             on_trigger_debug     = self.trigger_debug_mode,
         )
+        self._tray.notify("CodingCat", "Right-click the cat or tray icon to Exit")
 
         # ── Productivity → state bridge ───────────────────────────
         self._prod_mgr.state_changed.connect(self._on_productivity_state)

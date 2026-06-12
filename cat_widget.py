@@ -22,7 +22,7 @@ from typing import Optional
 from PyQt6.QtWidgets import QWidget, QApplication
 from PyQt6.QtGui import (
     QPixmap, QCursor, QMouseEvent, QEnterEvent,
-    QPainter, QPaintEvent, QColor, QFont,
+    QPainter, QPaintEvent, QColor, QFont, QKeyEvent,
 )
 from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, QSize, pyqtSignal
 
@@ -47,6 +47,7 @@ class CatWidget(QWidget):
     """
 
     right_clicked = pyqtSignal(QPoint)
+    exit_requested = pyqtSignal()
 
     def __init__(
         self,
@@ -84,7 +85,8 @@ class CatWidget(QWidget):
 
         # configure the window
         self._init_window()
-
+        self.setToolTip("Right-click to open menu; Esc or Ctrl+Alt+Q to Exit")
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         # load idle frames before first paint
         self._switch_frames("idle", False)
 
@@ -180,6 +182,17 @@ class CatWidget(QWidget):
     def mouseDoubleClickEvent(self, e: QMouseEvent) -> None:
         if e.button() == Qt.MouseButton.LeftButton:
             self._on_dbl_click()
+
+    def keyPressEvent(self, e: QKeyEvent) -> None:
+        if e.key() == Qt.Key.Key_Escape:
+            self.exit_requested.emit()
+            return
+        if (e.modifiers() & Qt.KeyboardModifier.ControlModifier) and (
+            e.modifiers() & Qt.KeyboardModifier.AltModifier
+        ) and e.key() == Qt.Key.Key_Q:
+            self.exit_requested.emit()
+            return
+        super().keyPressEvent(e)
 
     def enterEvent(self, _: QEnterEvent) -> None:
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))

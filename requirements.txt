@@ -1,5 +1,6 @@
 PyQt6>=6.6.0
-Pillow>=10.0.0
 psutil>=5.9.0
 pynput>=1.7.6
+# build-time only (icon generation, tools/build_sprites.py, packaging)
+Pillow>=10.0.0
 pyinstaller>=6.0.0

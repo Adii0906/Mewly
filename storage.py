@@ -6,17 +6,27 @@ from __future__ import annotations
 import sqlite3
 import os
 import time
-from typing import Any, Optional
-from config import APP_NAME, DB_NAME
+from contextlib import contextmanager
+from typing import Any, Iterator
+from config import DB_NAME
 
 DB_PATH = os.path.join(os.path.expanduser("~"), ".coding_cat", DB_NAME)
 
 
-def _get_conn() -> sqlite3.Connection:
+@contextmanager
+def _get_conn() -> Iterator[sqlite3.Connection]:
+    """Open a connection, commit on success, and ALWAYS close it.
+
+    (``with sqlite3.connect(...)`` alone only commits; it never closes.)
+    """
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=5)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def init_db() -> None:
@@ -72,11 +82,12 @@ def log_session(session_type: str, duration_s: float) -> None:
                 "INSERT INTO sessions(session_type,started_at,ended_at,duration_s) VALUES(?,?,?,?)",
                 (session_type, now - duration_s, now, duration_s)
             )
-            date = time.strftime("%Y-%m-%d")
-            conn.execute("""
-                INSERT INTO stats(date,pomodoros) VALUES(?,1)
-                ON CONFLICT(date) DO UPDATE SET pomodoros=pomodoros+1
-            """, (date,))
+            if session_type == "pomodoro_work":     # breaks are not pomodoros
+                date = time.strftime("%Y-%m-%d")
+                conn.execute("""
+                    INSERT INTO stats(date,pomodoros) VALUES(?,1)
+                    ON CONFLICT(date) DO UPDATE SET pomodoros=pomodoros+1
+                """, (date,))
     except Exception:
         pass
 

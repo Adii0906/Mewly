@@ -1,132 +1,183 @@
 """
-CodingCat - State Manager
+Mewly - State Manager
 
-Simple state machine with four states:
-- CODE: IDE active or typing
-- IDLE: User present but not coding
-- WALK: Occasional movement during IDLE
-- SLEEP: After 10+ seconds of inactivity
+Two small, deterministic, Qt-free pieces:
 
-Priority: CODE > SLEEP > WALK > IDLE
+ActivityClassifier
+    Turns activity samples (time since last input, coding keystrokes,
+    Pomodoro phase) into ONE base state: IDLE, CODE, FOCUS, SLEEP or BREAK.
+    Uses thresholds, a grace period and hysteresis so the cat never
+    thrashes between states.
+
+CatBehavior
+    Decides which animation should be on screen, with a strict priority:
+
+        one-shot reaction  >  walking  >  base state
+
+    One-shots (click, heart, wake, task, debug) always finish unless a
+    higher-priority one-shot replaces them; base-state changes that happen
+    meanwhile are remembered and shown when the one-shot ends.
+    Waking up (SLEEP → anything) automatically plays the "wake" one-shot.
+
+There is no randomness anywhere: every change has an explicit cause.
 """
 from __future__ import annotations
-import logging
-from enum import Enum
-from typing import Optional, Callable
 
-log = logging.getLogger("CodingCat.state")
+import logging
+from dataclasses import dataclass
+from enum import Enum
+from typing import Callable, Optional, Sequence
+
+from config import (
+    CODE_ENTER_KEYS, CODE_ENTER_WINDOW, CODE_GRACE_SECS,
+    FOCUS_ENTER_KPM, FOCUS_EXIT_KPM, FOCUS_MIN_CODE_SECS,
+    MIN_STATE_DWELL_SECS, DEFAULT_SLEEP_AFTER_SECS, ONESHOT_PRIORITY,
+)
+
+log = logging.getLogger("Mewly.state")
 
 
 class CatState(str, Enum):
-    IDLE    = "idle"
-    WALK    = "walk"
-    SLEEP   = "sleep"
-    JUMP    = "jump"
-    CODE    = "code"
-    FOCUS   = "focus"
-    TASK    = "task"
-    DEBUG   = "debug"
-    BREAK   = "break"
-    LOAF    = "loaf"
-    STRETCH = "stretch"
-    GROOM   = "groom"
-    BLINK   = "blink"
+    IDLE  = "idle"
+    CODE  = "code"
+    FOCUS = "focus"
+    SLEEP = "sleep"
+    BREAK = "break"
 
 
-# States where the cat must not walk
-STATIONARY_STATES = {
-    CatState.SLEEP, CatState.CODE,  CatState.FOCUS,
-    CatState.TASK,  CatState.DEBUG, CatState.BREAK,
-    CatState.LOAF,  CatState.STRETCH, CatState.GROOM,
-}
-
-# Minimum ticks before leaving a state (at ~8 FPS default)
-STATE_MIN_TICKS: dict[CatState, int] = {
-    CatState.CODE:   32,   # ~4 seconds minimum
-    CatState.IDLE:   24,   # ~3 seconds minimum
-    CatState.WALK:   16,   # ~2 seconds minimum
-    CatState.SLEEP:  40,   # ~5 seconds minimum (can't wake too fast)
-    CatState.JUMP:   8,    # ~1 second
-    # Virtual states
-    CatState.LOAF:   24,
-    CatState.STRETCH: 24,
-    CatState.GROOM:  24,
-    CatState.BLINK:  8,
-}
+# Transitions between these three are debounced by MIN_STATE_DWELL_SECS.
+_DEBOUNCED = {CatState.IDLE, CatState.CODE, CatState.FOCUS}
 
 
-class StateManager:
-    def __init__(
-        self,
-        on_state_change: Optional[Callable[[CatState, CatState], None]] = None,
-    ) -> None:
-        self._state: CatState = CatState.IDLE
-        self._ticks_in_state: int = 0
-        self._forced: Optional[CatState] = None
-        self._forced_remaining: int = 0
-        self._productivity: Optional[CatState] = None
-        self._on_change = on_state_change
-        log.info("StateManager initialized — starting state: %s", self._state.value)
+@dataclass
+class ActivitySample:
+    now: float                         # seconds (monotonic)
+    idle_secs: float                   # since the last keyboard/mouse input
+    coding_key_times: Sequence[float]  # timestamps of keystrokes made in an IDE (last ~60 s)
+    on_break: bool = False             # Pomodoro break phase running
 
-    # ── Public ────────────────────────────────────────────────────
+
+class ActivityClassifier:
+    def __init__(self, sleep_after_secs: float = DEFAULT_SLEEP_AFTER_SECS) -> None:
+        self.sleep_after_secs = sleep_after_secs
+        self._state = CatState.IDLE
+        self._since = float("-inf")         # when the current state was entered
+        self._coding_since = 0.0            # start of the current CODE/FOCUS session
 
     @property
     def state(self) -> CatState:
         return self._state
 
-    def force_state(self, state: CatState, duration_ticks: int = 60) -> None:
-        """Immediately enter *state* for *duration_ticks* ticks, ignoring all else."""
-        self._forced = state
-        self._forced_remaining = duration_ticks
-        self._do_transition(state)
-
-    def set_productivity_state(self, state: Optional[CatState]) -> None:
-        self._productivity = state
-
-    def tick(self, movement_state: CatState) -> CatState:
-        """Resolve state for this tick.  Returns the current state."""
-        self._ticks_in_state += 1
-
-        # Priority 1 — forced
-        if self._forced is not None:
-            self._forced_remaining -= 1
-            if self._forced_remaining <= 0:
-                self._forced = None
-                self._ticks_in_state = 9999   # satisfy min-tick guard immediately
-                log.debug("Force expired — resuming normal logic")
-                # fall through to priority 2/3 immediately
-            else:
-                if self._state != self._forced:
-                    self._do_transition(self._forced)
-                return self._state
-
-        # Priority 2 — productivity (IDE / keyboard / pomodoro)
-        if self._productivity is not None:
-            self._try_transition(self._productivity)
+    def update(self, s: ActivitySample) -> CatState:
+        target = self._target(s)
+        if target == self._state:
             return self._state
-
-        # Priority 3 — movement / natural behaviour
-        self._try_transition(movement_state)
+        debounced = self._state in _DEBOUNCED and target in _DEBOUNCED
+        if debounced and s.now - self._since < MIN_STATE_DWELL_SECS:
+            return self._state
+        if target in (CatState.CODE, CatState.FOCUS) and self._state not in (CatState.CODE, CatState.FOCUS):
+            self._coding_since = s.now
+        log.info("Activity  %s → %s", self._state.value, target.value)
+        self._state = target
+        self._since = s.now
         return self._state
 
-    # ── Private ───────────────────────────────────────────────────
+    def _target(self, s: ActivitySample) -> CatState:
+        if s.on_break:
+            return CatState.BREAK
+        if s.idle_secs >= self.sleep_after_secs:
+            return CatState.SLEEP
 
-    def _try_transition(self, desired: CatState) -> None:
-        if desired == self._state:
-            return
-        min_t = STATE_MIN_TICKS.get(self._state, 0)
-        if self._ticks_in_state >= min_t:
-            self._do_transition(desired)
+        keys = s.coding_key_times
+        coding_now = self._state in (CatState.CODE, CatState.FOCUS)
+        if coding_now:
+            last = max(keys) if keys else float("-inf")
+            coding = s.now - last <= CODE_GRACE_SECS
+        else:
+            coding = sum(1 for t in keys if t >= s.now - CODE_ENTER_WINDOW) >= CODE_ENTER_KEYS
+        if not coding:
+            return CatState.IDLE
 
-    def _do_transition(self, new_state: CatState) -> None:
-        if new_state == self._state:
+        kpm = sum(1 for t in keys if t >= s.now - 60.0)
+        if self._state == CatState.FOCUS:
+            return CatState.FOCUS if kpm >= FOCUS_EXIT_KPM else CatState.CODE
+        if (self._state == CatState.CODE
+                and s.now - self._coding_since >= FOCUS_MIN_CODE_SECS
+                and kpm >= FOCUS_ENTER_KPM):
+            return CatState.FOCUS
+        return CatState.CODE
+
+
+class CatBehavior:
+    """Resolves the animation to show.  Owns no timers."""
+
+    def __init__(self, on_change: Optional[Callable[[str], None]] = None) -> None:
+        self._base = CatState.IDLE
+        self._oneshot: Optional[str] = None
+        self._walking = False
+        self._on_change = on_change
+        self._shown = self.animation()
+
+    # ── queries ──────────────────────────────────────────────────
+
+    @property
+    def base(self) -> CatState:
+        return self._base
+
+    @property
+    def oneshot(self) -> Optional[str]:
+        return self._oneshot
+
+    @property
+    def movement_paused(self) -> bool:
+        """Walking pauses while a one-shot plays and resumes afterwards."""
+        return self._oneshot is not None
+
+    def animation(self) -> str:
+        if self._oneshot is not None:
+            return self._oneshot
+        if self._walking:
+            return "walk"
+        return self._base.value
+
+    # ── events ───────────────────────────────────────────────────
+
+    def set_listener(self, on_change: Callable[[str], None]) -> None:
+        self._on_change = on_change
+
+    def set_base(self, state: CatState) -> None:
+        if state == self._base:
             return
-        old = self._state
-        self._state = new_state
-        self._ticks_in_state = 0
-        log.info("Transition  %-8s → %-8s", old.value, new_state.value)
-        if self._on_change:
-            try:
-                self._on_change(old, new_state)
-            except Exception as exc:
-                log.exception("on_state_change callback raised: %s", exc)
+        old, self._base = self._base, state
+        log.info("Base  %s → %s", old.value, state.value)
+        if old == CatState.SLEEP:
+            self.trigger("wake")
+        self._notify()
+
+    def trigger(self, name: str) -> bool:
+        """Start a one-shot.  Returns False if a higher/equal one is playing."""
+        if self._oneshot is not None:
+            if ONESHOT_PRIORITY.get(name, 0) <= ONESHOT_PRIORITY.get(self._oneshot, 0):
+                log.debug("One-shot %s ignored (playing %s)", name, self._oneshot)
+                return False
+        self._oneshot = name
+        log.info("One-shot  %s", name)
+        self._notify()
+        return True
+
+    def oneshot_finished(self, name: str) -> None:
+        if self._oneshot == name:
+            self._oneshot = None
+            self._notify()
+
+    def set_walking(self, walking: bool) -> None:
+        if walking != self._walking:
+            self._walking = walking
+            self._notify()
+
+    def _notify(self) -> None:
+        anim = self.animation()
+        if anim != self._shown:
+            self._shown = anim
+            if self._on_change:
+                self._on_change(anim)

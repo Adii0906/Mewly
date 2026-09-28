@@ -1,196 +1,272 @@
 """
-CodingCat - Cat Widget (v3 - ground-up rewrite)
+Mewly - Cat Widget
 
-WHAT WAS WRONG:
-  QLabel inside WA_TranslucentBackground on Windows does not properly
-  clear its own background between frames — the label compositor leaves
-  ghost pixels from the previous frame because the child widget gets a
-  dirty region that doesn't match the transparent parent's clear pass.
+One frameless, translucent window with no child widgets.  paintEvent clears
+the surface and draws exactly one cached sprite frame (plus an optional
+speech bubble / hearts), which avoids ghosting on Windows.
 
-THE ONLY CORRECT APPROACH FOR A TRANSPARENT ANIMATED WINDOW ON WINDOWS:
-  1. One QWidget, no child widgets at all.
-  2. Override paintEvent.
-  3. FIRST call painter.eraseRect() / fillRect with transparent, THEN draw.
-  4. Call update() to schedule a repaint each tick.
-  5. One QTimer. No interval changes. Frame index counter gates speed.
+Timing: ONE timer drives everything (movement, animation, overlay fades).
+Its interval adapts: ~60 Hz while walking or while an overlay fades, otherwise
+it sleeps until the next animation frame is due (e.g. 500 ms while asleep).
+
+Ownership:
+- AnimationPlayer decides which frame is shown (single authority).
+- CatBehavior decides which animation should play (priority rules).
+- MovementManager moves the window only when a walk was requested.
 """
 from __future__ import annotations
-import random
+
 import logging
+import time
 from typing import Optional
 
-from PyQt6.QtWidgets import QWidget, QApplication
+from PyQt6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import (
-    QPixmap, QCursor, QMouseEvent, QEnterEvent,
-    QPainter, QPaintEvent, QColor, QFont, QKeyEvent,
+    QBrush, QColor, QCursor, QEnterEvent, QFont, QGuiApplication, QKeyEvent,
+    QMouseEvent, QMoveEvent, QPainter, QPaintEvent, QPainterPath,
 )
-from PyQt6.QtCore import Qt, QTimer, QPoint, QRect, QSize, pyqtSignal
+from PyQt6.QtWidgets import QApplication, QWidget
 
+from animation_controller import AnimationPlayer
 from animation_manager import AnimationManager
-from state_manager import StateManager, CatState, STATIONARY_STATES
+from config import (
+    BUBBLE_HEIGHT_RATIO, CAT_DISPLAY_SIZE, CLICK_REACTIONS, DEFAULT_FPS,
+    MAX_IDLE_TICK_MS, MOVE_TICK_MS, WALK_SPEED_PX_PER_SEC, WALK_STEP_PX,
+)
 from movement_manager import MovementManager
-from config import CAT_DISPLAY_SIZE, STATE_FPS_OVERRIDE, DEFAULT_FPS
+from state_manager import CatBehavior, CatState
 
-log = logging.getLogger("CodingCat.widget")
+log = logging.getLogger("Mewly.widget")
 
-# Fully transparent colour used to erase the window each frame
-_TRANSPARENT = QColor(0, 0, 0, 0)
+_BUBBLE_MS = 1600          # speech bubble lifetime
+_BUBBLE_FADE_MS = 400      # ...of which the last part fades out
+_HEARTS_MS = 1300
+_DRAG_THRESHOLD = 4
+
+
+def _now_ms() -> float:
+    return time.monotonic() * 1000.0
 
 
 class CatWidget(QWidget):
-    """
-    Single transparent frameless window.
-    - No child widgets (no QLabel, no layout).
-    - paintEvent erases the whole window FIRST, then draws exactly one pixmap.
-    - One QTimer at fixed 50 ms (20 Hz master clock).
-    - Frame index counter controls animation speed without touching the timer.
-    """
-
     right_clicked = pyqtSignal(QPoint)
     exit_requested = pyqtSignal()
+    user_interacted = pyqtSignal()        # click on the cat counts as user activity
 
     def __init__(
         self,
         anim_manager: AnimationManager,
-        state_manager: StateManager,
+        behavior: CatBehavior,
         movement_manager: MovementManager,
         display_size: int = CAT_DISPLAY_SIZE,
         fps: int = DEFAULT_FPS,
     ) -> None:
         super().__init__()
+        self._anim = anim_manager
+        self._behavior = behavior
+        self._move = movement_manager
+        self._player = AnimationPlayer(speed=fps / DEFAULT_FPS)
+        self._on_top: Optional[bool] = None
 
-        self._anim  = anim_manager
-        self._state = state_manager
-        self._move  = movement_manager
-        self._size  = display_size
-        self._fps   = fps
+        # input
+        self._press_pos: Optional[QPoint] = None
+        self._drag_offset: Optional[QPoint] = None
+        self._dragging = False
+        self._suppress_release = False
+        self._click_timer = QTimer(self)
+        self._click_timer.setSingleShot(True)
+        self._click_timer.timeout.connect(self._on_single_click)
+        self._click_count = 0
 
-        # current animation
-        self._active_state: str        = "idle"
-        self._active_flip:  bool       = False
-        self._frames:       list[QPixmap] = []
-        self._frame_idx:    int        = 0
+        # overlays
+        self._bubble_text = ""
+        self._bubble_start = -1e9
+        self._hearts_start = -1e9
 
-        # frame-rate governor (master clock = 20 Hz)
-        self._tick_ctr:     int = 0
-        self._ticks_per_frame: int = self._tpf(fps)
-
-        # drag
-        self._drag_offset:  Optional[QPoint] = None
-        self._is_dragging:  bool = False
-
-        # reaction text overlay
-        self._reaction:     str = ""
-        self._react_alpha:  int = 0
-
-        # configure the window
         self._init_window()
-        self.setToolTip("Right-click to open menu; Esc or Ctrl+Alt+Q to Exit")
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        # load idle frames before first paint
-        self._switch_frames("idle", False)
+        self._apply_size()
 
-        # single timer — never stopped, never restarted
+        now = _now_ms()
+        self._last_tick = now
+        self._player.play(self._behavior.animation(), now)
+
         self._timer = QTimer(self)
         self._timer.setTimerType(Qt.TimerType.PreciseTimer)
-        self._timer.setInterval(50)   # 20 Hz
+        self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._tick)
-        self._timer.start()
-
+        self._schedule(now)
         log.info("CatWidget ready  size=%d  fps=%d", display_size, fps)
 
     # ── public ────────────────────────────────────────────────────
 
     def set_fps(self, fps: int) -> None:
-        self._fps = fps
-        self._ticks_per_frame = self._tpf(fps)
+        self._player.set_speed(fps / DEFAULT_FPS)
 
     def set_display_size(self, size: int) -> None:
-        self._size = size
-        self.setFixedSize(size, size)
-        self._anim.display_size = size
-        self._anim._frames.clear()
-        self._anim._flipped.clear()
-        self._anim._slice_all()
-        self._switch_frames(self._active_state, self._active_flip)
+        if size == self._anim.display_size:
+            return
+        # Keep the cat's feet where they are while the window changes size.
+        feet = QPoint(self.x() + self.width() // 2, self.y() + self.height())
+        self._anim.set_display_size(size)
+        self._apply_size()
+        self.move_to(feet.x() - self.width() // 2, feet.y() - self.height())
+        self.update()
 
     def set_always_on_top(self, on_top: bool) -> None:
-        flags = self.windowFlags()
-        if on_top:
-            flags |= Qt.WindowType.WindowStaysOnTopHint
-        else:
-            flags &= ~Qt.WindowType.WindowStaysOnTopHint
-        self.setWindowFlags(flags)
-        self.show()
+        if on_top == self._on_top:
+            return
+        self._on_top = on_top
+        visible = self.isVisible()
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, on_top)
+        if visible:            # setWindowFlag hides the window
+            self.show()
+
+    def move_to(self, x: int, y: int) -> None:
+        self._move.set_position(x, y)
+        self.move(x, y)
 
     def show_reaction(self, text: str) -> None:
-        self._reaction   = text
-        self._react_alpha = 255
-        QTimer.singleShot(1400, self._fade_reaction)
+        self._bubble_text = text
+        self._bubble_start = _now_ms()
+        self._kick()
 
-    # ── Qt painting ───────────────────────────────────────────────
+    def show_hearts(self) -> None:
+        self._hearts_start = _now_ms()
+        self._kick()
+
+    def walk_to_edge(self, where: str) -> None:
+        lo, hi = self._move.bounds()
+        target = {"left": lo, "right": hi}.get(where, (lo + hi) / 2)
+        self._start_walk(target)
+
+    def on_animation_changed(self, name: str) -> None:
+        """CatBehavior callback: the desired animation changed."""
+        if self._player.play(name, _now_ms()):
+            self.update()
+        self._kick()
+
+    # ── painting ──────────────────────────────────────────────────
 
     def paintEvent(self, _: QPaintEvent) -> None:
         p = QPainter(self)
-
-        # Step 1 — erase to fully transparent (CRITICAL — prevents ghosting)
-        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
-        p.fillRect(self.rect(), _TRANSPARENT)
-
-        # Step 2 — draw current sprite frame (SourceOver on cleared canvas)
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+        p.fillRect(self.rect(), Qt.GlobalColor.transparent)
         p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
-        if self._frames:
-            p.drawPixmap(0, 0, self._size, self._size,
-                         self._frames[self._frame_idx])
 
-        # Step 3 — reaction text (optional)
-        if self._react_alpha > 0 and self._reaction:
-            c = QColor(255, 220, 80, self._react_alpha)
-            p.setPen(c)
-            p.setFont(QFont("Segoe UI Emoji", 13, QFont.Weight.Bold))
-            p.drawText(QRect(0, -20, self._size, 26),
-                       Qt.AlignmentFlag.AlignHCenter, self._reaction)
+        strip, idx = self._player.frame
+        flip = self._player.flippable and not self._move.facing_left
+        p.drawPixmap(0, self._bubble_h, self._anim.pixmap(strip, idx, flip))
 
+        now = _now_ms()
+        self._paint_hearts(p, now)
+        self._paint_bubble(p, now)
         p.end()
 
-    # ── mouse ────────────────────────────────────────────────────
+    def _paint_bubble(self, p: QPainter, now: float) -> None:
+        age = now - self._bubble_start
+        if not self._bubble_text or age >= _BUBBLE_MS:
+            return
+        alpha = 1.0 if age < _BUBBLE_MS - _BUBBLE_FADE_MS else (_BUBBLE_MS - age) / _BUBBLE_FADE_MS
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        font = QFont("Segoe UI", max(7, round(self._bubble_h * 0.42)), QFont.Weight.Bold)
+        p.setFont(font)
+        fm = p.fontMetrics()
+        tw = min(self.width() - 4, fm.horizontalAdvance(self._bubble_text) + 12)
+        th = min(self._bubble_h - 2, fm.height() + 4)
+        rect = QRectF((self.width() - tw) / 2, 1, tw, th)
+        path = QPainterPath()
+        path.addRoundedRect(rect, th / 2, th / 2)
+        p.setOpacity(alpha)
+        p.fillPath(path, QBrush(QColor(30, 30, 46, 210)))
+        p.setPen(QColor(255, 224, 120))
+        p.drawText(rect, Qt.AlignmentFlag.AlignCenter,
+                   fm.elidedText(self._bubble_text, Qt.TextElideMode.ElideRight, int(tw) - 8))
+        p.setOpacity(1.0)
+
+    def _paint_hearts(self, p: QPainter, now: float) -> None:
+        age = now - self._hearts_start
+        if age >= _HEARTS_MS or age < 0:
+            return
+        t = age / _HEARTS_MS
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        size = max(8, round(self.height() * 0.13))
+        p.setFont(QFont("Segoe UI Symbol", size))
+        p.setPen(QColor(255, 105, 150))
+        rise = t * self.height() * 0.45
+        base_y = self._bubble_h + self.height() * 0.35
+        # Three hearts at fixed positions and staggered starts (deterministic).
+        for i, fx in enumerate((0.30, 0.52, 0.72)):
+            lt = t - i * 0.12
+            if lt <= 0:
+                continue
+            p.setOpacity(max(0.0, 1.0 - lt))
+            p.drawText(QPointF(self.width() * fx - size / 2, base_y - rise + i * 4), "♥")
+        p.setOpacity(1.0)
+
+    # ── mouse / keyboard ─────────────────────────────────────────
 
     def mousePressEvent(self, e: QMouseEvent) -> None:
         if e.button() == Qt.MouseButton.LeftButton:
-            self._drag_offset = e.pos()
-            self._is_dragging = False
+            self._press_pos = e.globalPosition().toPoint()
+            self._drag_offset = e.position().toPoint()
+            self._dragging = False
         elif e.button() == Qt.MouseButton.RightButton:
             self.right_clicked.emit(e.globalPosition().toPoint())
 
     def mouseMoveEvent(self, e: QMouseEvent) -> None:
-        if self._drag_offset and e.buttons() & Qt.MouseButton.LeftButton:
-            if not self._is_dragging:
-                if (e.pos() - self._drag_offset).manhattanLength() >= 4:
-                    self._is_dragging = True
-            if self._is_dragging:
-                new_pos = e.globalPosition().toPoint() - self._drag_offset
-                self.move(new_pos)
-                self._move.set_position(new_pos.x(), new_pos.y())
+        if self._press_pos is None or not (e.buttons() & Qt.MouseButton.LeftButton):
+            return
+        gpos = e.globalPosition().toPoint()
+        if not self._dragging and (gpos - self._press_pos).manhattanLength() >= _DRAG_THRESHOLD:
+            self._dragging = True
+            self._click_timer.stop()
+            if self._move.is_walking:          # the user took control
+                self._move.stop()
+                self._behavior.set_walking(False)
+        if self._dragging:
+            new = gpos - self._drag_offset
+            self.move_to(new.x(), new.y())
 
     def mouseReleaseEvent(self, e: QMouseEvent) -> None:
-        if e.button() == Qt.MouseButton.LeftButton:
-            if not self._is_dragging:
-                self._on_click()
-            self._drag_offset = None
-            self._is_dragging = False
+        if e.button() != Qt.MouseButton.LeftButton:
+            return
+        was_dragging = self._dragging
+        self._press_pos = None
+        self._dragging = False
+        if was_dragging:
+            self._after_drop()
+        elif self._suppress_release:
+            self._suppress_release = False
+        else:
+            # Wait for a possible second click before reacting.
+            self._click_timer.start(QApplication.doubleClickInterval())
 
     def mouseDoubleClickEvent(self, e: QMouseEvent) -> None:
-        if e.button() == Qt.MouseButton.LeftButton:
-            self._on_dbl_click()
+        if e.button() != Qt.MouseButton.LeftButton:
+            return
+        self._click_timer.stop()
+        self._suppress_release = True
+        self._press_pos = None
+        was_asleep = self._behavior.base == CatState.SLEEP
+        self.user_interacted.emit()
+        if not was_asleep:
+            self._behavior.trigger("heart")
+            self.show_hearts()
 
     def keyPressEvent(self, e: QKeyEvent) -> None:
-        if e.key() == Qt.Key.Key_Escape:
+        key = e.key()
+        mods = e.modifiers()
+        if key == Qt.Key.Key_Escape or (
+            mods & Qt.KeyboardModifier.ControlModifier
+            and mods & Qt.KeyboardModifier.AltModifier
+            and key == Qt.Key.Key_Q
+        ):
             self.exit_requested.emit()
             return
-        if (e.modifiers() & Qt.KeyboardModifier.ControlModifier) and (
-            e.modifiers() & Qt.KeyboardModifier.AltModifier
-        ) and e.key() == Qt.Key.Key_Q:
-            self.exit_requested.emit()
+        if key in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+            step = WALK_STEP_PX * self._scale()
+            base = self._move.x
+            self._start_walk(base - step if key == Qt.Key.Key_Left else base + step)
             return
         super().keyPressEvent(e)
 
@@ -198,87 +274,120 @@ class CatWidget(QWidget):
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
 
     def leaveEvent(self, _) -> None:
-        self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
+        self.unsetCursor()
+
+    def moveEvent(self, e: QMoveEvent) -> None:
+        # Moving onto a monitor with a different scale factor: rebuild sprites.
+        self._anim.set_device_pixel_ratio(self.devicePixelRatioF())
+        super().moveEvent(e)
+
+    def showEvent(self, e) -> None:
+        self._anim.set_device_pixel_ratio(self.devicePixelRatioF())
+        super().showEvent(e)
+        self._kick()
 
     # ── master tick ───────────────────────────────────────────────
 
     def _tick(self) -> None:
-        # --- resolve state & position ---
-        if not self._is_dragging:
-            locked         = self._state.state in STATIONARY_STATES
-            movement_state = self._move.tick(locked)
-            resolved       = self._state.tick(movement_state)
+        try:
+            self._advance(_now_ms())
+        except Exception:
+            log.exception("tick failed")
+        finally:
+            self._schedule(_now_ms())         # the single timer must never die
 
-            # move window
-            mx, my = self._move.x, self._move.y
-            if self.x() != mx or self.y() != my:
-                self.move(mx, my)
+    def _advance(self, now: float) -> None:
+        dt = (now - self._last_tick) / 1000.0
+        self._last_tick = now
+        dirty = False
 
-            # update animation speed
-            sfps = STATE_FPS_OVERRIDE.get(resolved.value, self._fps)
-            self._ticks_per_frame = self._tpf(sfps)
+        # 1. movement (paused during one-shots and while dragging)
+        if self._move.is_walking and not self._dragging and not self._behavior.movement_paused:
+            if self._move.update(dt):
+                if (self.x(), self.y()) != (self._move.x, self._move.y):
+                    self.move(self._move.x, self._move.y)
+            if not self._move.is_walking:
+                self._behavior.set_walking(False)
 
-            # switch frame list when state or direction changes
-            flip = self._move.facing_left
-            if resolved.value != self._active_state or flip != self._active_flip:
-                log.debug("State → %s  flip=%s", resolved.value, flip)
-                self._switch_frames(resolved.value, flip)
+        # 2. animation
+        changed, finished = self._player.update(now)
+        dirty |= changed
+        if finished:
+            self._behavior.oneshot_finished(finished)   # may call on_animation_changed
 
-        # --- advance frame index ---
-        self._tick_ctr += 1
-        if self._tick_ctr >= self._ticks_per_frame:
-            self._tick_ctr = 0
-            if self._frames:
-                self._frame_idx = (self._frame_idx + 1) % len(self._frames)
+        # 3. overlays
+        if self._overlay_active(now) or self._overlay_active(now - 50):
+            dirty = True
 
-        # --- repaint (erases old frame first via paintEvent) ---
-        self.update()
+        if dirty:
+            self.update()
+
+    def _schedule(self, now: float) -> None:
+        if self._move.is_walking or self._overlay_active(now):
+            interval = MOVE_TICK_MS
+        else:
+            nxt = self._player.ms_until_next(now)
+            interval = int(min(MAX_IDLE_TICK_MS, max(MOVE_TICK_MS, nxt + 1)))
+        self._timer.start(interval)
+
+    def _kick(self) -> None:
+        """Re-evaluate soon (after an external change)."""
+        if not self._timer.isActive() or self._timer.remainingTime() > MOVE_TICK_MS:
+            self._timer.start(MOVE_TICK_MS)
+
+    def _overlay_active(self, now: float) -> bool:
+        return now - self._bubble_start < _BUBBLE_MS or 0 <= now - self._hearts_start < _HEARTS_MS
 
     # ── helpers ───────────────────────────────────────────────────
 
     def _init_window(self) -> None:
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
             | Qt.WindowType.NoDropShadowWindowHint
         )
-        # WA_TranslucentBackground tells Qt the window surface supports alpha.
-        # WA_NoSystemBackground stops Qt from pre-filling with the palette colour.
-        # Together they give us a clean transparent canvas every paintEvent.
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
-        self.setFixedSize(self._size, self._size)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.setToolTip("Click: meow · Double-click: ♥ · Drag: move · ←/→: walk · Right-click: menu")
 
-    def _switch_frames(self, state: str, flip: bool) -> None:
-        """Load a new frame list. Always resets index to 0."""
-        frames = self._anim.get_frames(state, flip=flip)
-        if not frames:
-            log.warning("No frames for state=%s — staying on %s", state, self._active_state)
+    def _apply_size(self) -> None:
+        self._bubble_h = max(14, round(self._anim.sprite_height * BUBBLE_HEIGHT_RATIO))
+        w, h = self._anim.sprite_width, self._anim.sprite_height + self._bubble_h
+        self.setFixedSize(w, h)
+        self._move.set_size(w, h)
+
+    def _scale(self) -> float:
+        return self._anim.display_size / CAT_DISPLAY_SIZE
+
+    def _start_walk(self, target_x: float) -> None:
+        if not self._move.is_walking:
+            # The previous tick may be up to MAX_IDLE_TICK_MS old; don't let the
+            # first step of the walk cover that whole interval (visible lurch).
+            self._last_tick = _now_ms()
+        self._move.walk_to(target_x, WALK_SPEED_PX_PER_SEC * self._scale())
+        self._behavior.set_walking(self._move.is_walking)
+        self._kick()
+
+    def _after_drop(self) -> None:
+        self._move.set_position(self.x(), self.y())
+        center = QPoint(self.x() + self.width() // 2, self.y() + self.height() // 2)
+        if QGuiApplication.screenAt(center) is None:
+            # Dropped into a gap between monitors: snap onto the nearest valid spot.
+            lo, hi = self._move.bounds()
+            self._move.set_position(min(max(self.x(), lo), hi), self.y())
+        self._move.clamp_vertical()
+        self.move(self._move.x, self._move.y)
+        back = self._move.out_of_bounds_x()
+        if back is not None:
+            self._start_walk(back)            # partly off-screen: walk back in
+
+    def _on_single_click(self) -> None:
+        was_asleep = self._behavior.base == CatState.SLEEP
+        self.user_interacted.emit()           # may wake the cat (plays "wake")
+        if was_asleep:
             return
-        self._active_state = state
-        self._active_flip  = flip
-        self._frames       = frames
-        self._frame_idx    = 0      # start from frame 0, no bleed from previous list
-        self._tick_ctr     = 0
-
-    @staticmethod
-    def _tpf(fps: int) -> int:
-        """Ticks-per-frame for a 20 Hz master clock."""
-        return max(1, round(20 / max(1, fps)))
-
-    def _on_click(self) -> None:
-        self.show_reaction(random.choice(["nyaa~", "purr ✨", "meow!", "💕 uwu"]))
-        self._state.force_state(CatState.JUMP, duration_ticks=12)
-
-    def _on_dbl_click(self) -> None:
-        self.show_reaction("💖 UWU!")
-        self._state.force_state(CatState.TASK, duration_ticks=20)
-
-    def _fade_reaction(self) -> None:
-        self._react_alpha = max(0, self._react_alpha - 40)
-        self.update()
-        if self._react_alpha > 0:
-            QTimer.singleShot(50, self._fade_reaction)
-        else:
-            self._reaction = ""
+        if self._behavior.trigger("jump"):
+            self.show_reaction(CLICK_REACTIONS[self._click_count % len(CLICK_REACTIONS)])
+            self._click_count += 1

@@ -32,15 +32,17 @@ Whether you're coding, debugging, taking a break, or away from your keyboard, Me
 
 | State | Description |
 |---------|-------------|
-| Idle | Waiting for activity |
-| Walk | Roaming around the screen |
-| Sleep | Triggered after inactivity |
-| Jump | Random reaction |
-| Code | Active coding detected |
-| Focus | High keyboard activity |
-| Task | Task completed animation |
-| Debug | Debug mode animation |
-| Break | Break time animation |
+| Idle | You're around but not coding |
+| Code | Typing in VS Code / Cursor / Windsurf (foreground) |
+| Focus | Sustained fast typing in the IDE |
+| Sleep | No keyboard/mouse input for a while (configurable) |
+| Wake | Plays when you come back |
+| Walk | Only when you ask (menu, arrow keys) — never random |
+| Jump / Heart | Click / double-click reactions |
+| Task / Debug | Menu or tray actions |
+| Break | Pomodoro break |
+
+Behaviour is fully deterministic — see [BEHAVIOR_SYSTEM.md](BEHAVIOR_SYSTEM.md).
 
 ---
 
@@ -76,15 +78,24 @@ No installation required.
 
 ## Assets
 
-Place the sprite sheets inside the `assets/` folder:
-
 ```text
 assets/
-├── sprite_basic.png
-└── sprite_coding.png
+├── source/            original sprite sheets (JPEG, black background)
+│   ├── sprite_basic.jpg
+│   └── sprite_coding.jpg
+├── sprites/           generated: one transparent strip per animation + manifest.json
+└── icon.ico
 ```
 
-Mewly automatically loads and slices the sprites at startup.
+The app only loads `assets/sprites/`. Those strips are generated once from the
+source sheets by `tools/build_sprites.py`, which keys out the background,
+detects each frame (even frames that touch), and places every frame on one
+shared canvas with the feet on a common ground line, so the cat never jumps
+or shakes when frames change. Re-run it after editing the source sheets:
+
+```bash
+python tools/build_sprites.py
+```
 
 ---
 
@@ -92,10 +103,12 @@ Mewly automatically loads and slices the sprites at startup.
 
 | Action | Result |
 |---------|---------|
-| Left Click | Random reaction |
+| Left Click | Jump + meow (wakes a sleeping cat) |
 | Double Click | Heart reaction |
 | Right Click | Open context menu |
-| Drag | Move Mewly anywhere |
+| Drag | Move Mewly anywhere (dropped half off-screen → walks back) |
+| ← / → | Walk left / right (click the cat first) |
+| Walk to… | Walk to the left edge, center or right edge |
 | Start Pomodoro | Begin work session |
 | Task Completed | Play task animation |
 | Debug Mode | Play debug animation |
@@ -110,9 +123,10 @@ Settings are stored automatically using SQLite.
 
 Available options:
 
-- Cat Size
-- Animation FPS
+- Cat Size (sprite height in pixels)
+- Animation FPS (overall speed; 8 = as designed)
 - Always On Top
+- Sleep After (seconds of inactivity)
 - Pomodoro Work Duration
 - Pomodoro Break Duration
 
@@ -123,7 +137,8 @@ Available options:
 ```text
 mewly/
 ├── main.py
-├── animation_manager.py
+├── animation_controller.py   # the single animation authority (frame timing)
+├── animation_manager.py      # sprite loading + scaled pixmap cache
 ├── cat_widget.py
 ├── config.py
 ├── movement_manager.py
@@ -134,6 +149,8 @@ mewly/
 ├── storage.py
 ├── tray_manager.py
 ├── assets/
+├── tests/
+├── tools/                    # offline sprite builder
 ├── utils/
 ├── requirements.txt
 └── README.md
@@ -149,9 +166,9 @@ mewly/
 Dependencies:
 
 - PyQt6
-- Pillow
 - psutil
 - pynput
+- Pillow (build-time only: icon generation / sprite builder)
 
 Install them using:
 

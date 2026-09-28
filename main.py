@@ -14,22 +14,51 @@ import logging
 import os
 import sys
 
-# ── Logging (~/.coding_cat/cat.log + stdout).  MEWLY_DEBUG=1 for verbose. ───
+# ── Logging (~/.coding_cat/cat.log + console).  MEWLY_DEBUG=1 for verbose. ──
 _LOG_DIR = os.path.join(os.path.expanduser("~"), ".coding_cat")
 os.makedirs(_LOG_DIR, exist_ok=True)
+_handlers: list[logging.Handler] = [
+    logging.FileHandler(os.path.join(_LOG_DIR, "cat.log"), encoding="utf-8"),
+]
+if sys.stdout is not None:        # a windowed (no-console) .exe has no stdout
+    _handlers.append(logging.StreamHandler(sys.stdout))
 logging.basicConfig(
     level=logging.DEBUG if os.getenv("MEWLY_DEBUG") else logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[
-        logging.FileHandler(os.path.join(_LOG_DIR, "cat.log"), encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
+    handlers=_handlers,
 )
 log = logging.getLogger("Mewly.main")
 
-from PyQt6.QtCore import QPoint, QTimer          # noqa: E402
-from PyQt6.QtGui import QGuiApplication           # noqa: E402
-from PyQt6.QtWidgets import QApplication, QMenu   # noqa: E402
+
+def _fatal(title: str, message: str) -> None:
+    """Report a startup failure without needing Qt (it may be what failed)."""
+    log.critical("%s: %s", title, message)
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, message, title, 0x10)  # MB_ICONERROR
+        except Exception:
+            pass
+    elif sys.stderr is not None:
+        print(f"{title}: {message}", file=sys.stderr)
+
+
+try:
+    from PyQt6.QtCore import QPoint, QTimer          # noqa: E402
+    from PyQt6.QtGui import QGuiApplication           # noqa: E402
+    from PyQt6.QtWidgets import QApplication, QMenu   # noqa: E402
+except ImportError as _exc:
+    _fatal(
+        "Mewly could not start",
+        "The Qt libraries failed to load:\n\n"
+        f"{_exc}\n\n"
+        "If you are running from source, reinstall the dependencies in a clean "
+        "virtual environment:  pip install -r requirements.txt\n"
+        "If you are running Mewly.exe, please re-download it (the file may be "
+        "incomplete) and report this message.\n\n"
+        f"Log: {os.path.join(_LOG_DIR, 'cat.log')}",
+    )
+    raise SystemExit(1)
 
 from animation_manager import AnimationManager    # noqa: E402
 from cat_widget import CatWidget                  # noqa: E402
@@ -229,7 +258,82 @@ class CodingCatApp:
         self._tray.hide()
 
 
+def self_test(report_path: str | None) -> int:
+    """Headless check used by build.bat on the packaged .exe.
+
+    Loads the real Qt platform plugin, all sprites and every runtime
+    dependency, without showing a window or touching the user's settings.
+    Returns the process exit code (0 = OK).
+    """
+    lines: list[str] = []
+    ok = True
+
+    def check(name: str, fn) -> None:
+        nonlocal ok
+        try:
+            detail = fn()
+            lines.append(f"OK    {name}" + (f"  ({detail})" if detail else ""))
+        except Exception as exc:          # report every failure, keep going
+            ok = False
+            lines.append(f"FAIL  {name}: {type(exc).__name__}: {exc}")
+
+    app = QApplication(sys.argv[:1])
+
+    from PyQt6.QtCore import QT_VERSION_STR, PYQT_VERSION_STR, qVersion
+    lines.append(f"Python {sys.version.split()[0]}  PyQt6 {PYQT_VERSION_STR}  "
+                 f"Qt {qVersion()} (built for {QT_VERSION_STR})  frozen={getattr(sys, 'frozen', False)}")
+    check("Qt platform plugin", lambda: QGuiApplication.platformName() or "unknown")
+
+    def sprites() -> str:
+        import json
+        from config import SPRITES_DIR
+        with open(os.path.join(SPRITES_DIR, "manifest.json"), encoding="utf-8") as f:
+            names = list(json.load(f)["animations"])
+        am = AnimationManager()
+        for n in names:
+            if not am.has_strip(n) or am.pixmap(n, 0).isNull():
+                raise RuntimeError(f"sprite strip '{n}' did not load")
+        return f"{len(names)} strips"
+    check("sprites", sprites)
+
+    def tray_icon() -> str:
+        from tray_manager import _make_tray_icon
+        if _make_tray_icon().isNull():
+            raise RuntimeError("tray icon is empty")
+        return "icon.ico"
+    check("tray icon", tray_icon)
+
+    def activity() -> str:
+        import psutil
+        from pynput import keyboard
+        keyboard.Listener                     # backend import happens here
+        return f"psutil {psutil.__version__}, pynput backend {keyboard.Listener.__module__}"
+    check("activity monitoring", activity)
+
+    def settings_db() -> str:
+        import sqlite3
+        sqlite3.connect(":memory:").execute("select 1")
+        return f"sqlite {sqlite3.sqlite_version}"
+    check("sqlite", settings_db)
+
+    del app
+    lines.append("SELF-TEST " + ("PASSED" if ok else "FAILED"))
+    text = "\n".join(lines) + "\n"
+    log.info("Self-test:\n%s", text)
+    if report_path:
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write(text)
+    elif sys.stdout is not None:
+        print(text, end="")
+    return 0 if ok else 1
+
+
 def main() -> None:
+    if "--self-test" in sys.argv:
+        i = sys.argv.index("--self-test")
+        report = sys.argv[i + 1] if i + 1 < len(sys.argv) else None
+        sys.exit(self_test(report))
+
     # ── single-instance guard (Windows named mutex) ───────────────
     _mutex = None
     if sys.platform == "win32":

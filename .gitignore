@@ -15,6 +15,9 @@ dist/
 # PyInstaller
 *.manifest
 *.spec
+!Mewly.spec
+.build-venv/
+stop_codingcat.bat
 
 # IDE/editor files
 .vscode/

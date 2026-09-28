@@ -10,6 +10,10 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
+from config import (
+    MIN_FPS, MAX_FPS, MIN_DISPLAY_SIZE, MAX_DISPLAY_SIZE,
+    MIN_SLEEP_AFTER_SECS, MAX_SLEEP_AFTER_SECS,
+)
 from settings_manager import Settings
 
 
@@ -17,7 +21,7 @@ class SettingsDialog(QDialog):
     def __init__(self, settings: Settings, parent=None) -> None:
         super().__init__(parent)
         self.settings = settings
-        self.setWindowTitle("CodingCat ⚙ Settings")
+        self.setWindowTitle("Mewly ⚙ Settings")
         self.setMinimumWidth(380)
         self.setStyleSheet("""
             QDialog { background:#1e1e2e; color:#cdd6f4; }
@@ -53,12 +57,13 @@ class SettingsDialog(QDialog):
         form = QFormLayout(disp_group)
 
         self.fps_spin = QSpinBox()
-        self.fps_spin.setRange(4, 24)
+        self.fps_spin.setRange(MIN_FPS, MAX_FPS)
+        self.fps_spin.setToolTip("Overall animation speed (8 = as designed)")
         self.fps_spin.setValue(self.settings.fps)
         form.addRow("Animation FPS:", self.fps_spin)
 
         self.size_spin = QSpinBox()
-        self.size_spin.setRange(60, 240)
+        self.size_spin.setRange(MIN_DISPLAY_SIZE, MAX_DISPLAY_SIZE)
         self.size_spin.setSingleStep(10)
         self.size_spin.setValue(self.settings.display_size)
         form.addRow("Cat Size (px):", self.size_spin)
@@ -67,6 +72,18 @@ class SettingsDialog(QDialog):
         self.aot_check.setChecked(self.settings.always_on_top)
         form.addRow("", self.aot_check)
         layout.addWidget(disp_group)
+
+        # ── Behaviour ────────────────────────────────────────────
+        beh_group = QGroupBox("Behaviour")
+        bform = QFormLayout(beh_group)
+        self.sleep_spin = QSpinBox()
+        self.sleep_spin.setRange(MIN_SLEEP_AFTER_SECS, MAX_SLEEP_AFTER_SECS)
+        self.sleep_spin.setSingleStep(15)
+        self.sleep_spin.setSuffix(" s")
+        self.sleep_spin.setValue(self.settings.sleep_after_secs)
+        self.sleep_spin.setToolTip("No keyboard/mouse input for this long → the cat falls asleep")
+        bform.addRow("Sleep after:", self.sleep_spin)
+        layout.addWidget(beh_group)
 
         # ── Pomodoro ─────────────────────────────────────────────
         pomo_group = QGroupBox("🍅  Pomodoro")
@@ -101,4 +118,5 @@ class SettingsDialog(QDialog):
         self.settings.always_on_top    = self.aot_check.isChecked()
         self.settings.pomodoro_work_mins  = self.work_spin.value()
         self.settings.pomodoro_break_mins = self.break_spin.value()
+        self.settings.sleep_after_secs    = self.sleep_spin.value()
         self.accept()

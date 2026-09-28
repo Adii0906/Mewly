@@ -1,0 +1,44 @@
+{
+  "cell_w": 258,
+  "cell_h": 193,
+  "anchor_x": 129,
+  "ground_y": 187,
+  "animations": {
+    "idle": {
+      "file": "idle.png",
+      "frames": 4
+    },
+    "walk": {
+      "file": "walk.png",
+      "frames": 5
+    },
+    "sleep": {
+      "file": "sleep.png",
+      "frames": 4
+    },
+    "jump": {
+      "file": "jump.png",
+      "frames": 4
+    },
+    "code": {
+      "file": "code.png",
+      "frames": 4
+    },
+    "focus": {
+      "file": "focus.png",
+      "frames": 4
+    },
+    "task": {
+      "file": "task.png",
+      "frames": 5
+    },
+    "debug": {
+      "file": "debug.png",
+      "frames": 5
+    },
+    "break": {
+      "file": "break.png",
+      "frames": 5
+    }
+  }
+}

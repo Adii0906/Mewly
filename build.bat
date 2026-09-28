@@ -11,10 +11,11 @@ echo [CodingCat] Generating icon...
 python utils/icon_gen.py
 
 echo [CodingCat] Building executable...
-pyinstaller --noconfirm coding_cat.spec
+:: No .spec file (*.spec is git-ignored): build straight from main.py and
+:: bundle the pre-built sprite strips + icon.
+pyinstaller --noconfirm --onefile --windowed --name CodingCat --icon assets\icon.ico ^
+    --add-data "assets\sprites;assets\sprites" --add-data "assets\icon.ico;assets" main.py
 
-echo [CodingCat] Build complete!
-echo Output: dist\CodingCat.exe
 echo [CodingCat] Build complete!
 echo Output: dist\CodingCat.exe
 
@@ -38,11 +39,6 @@ if /I "%action%"=="C" (
 	taskkill /IM CodingCat.exe /F 2>nul || echo Could not kill process. Try running this script as Administrator.
 	goto end
 )
-if /I "%action%"=="C" (
-	echo Closing CodingCat...
-	call "%~dp0stop_codingcat.bat"
-	goto end
-)
 if /I "%action%"=="Q" goto end
 echo Invalid choice.
 goto monitor
@@ -52,23 +48,22 @@ rem Overwrite stop script with robust stop + cleanup logic
 >"%~dp0stop_codingcat.bat" echo @echo off
 >>"%~dp0stop_codingcat.bat" echo powershell -NoProfile -ExecutionPolicy Bypass -Command "^\
 $ErrorActionPreference = 'SilentlyContinue'; Write-Output 'Stopping CodingCat processes...'; ^\
-$names = @('CodingCat','codingcat','coding-cat','coding_cat'); ^\
+$names = @('CodingCat','codingcat','coding-cat','coding_cat','Mewly'); ^\
 for ($i=0; $i -lt 8; $i++) { ^\
-	$procs = Get-Process | Where-Object { $names -contains $_.ProcessName -or ($_.MainWindowTitle -and $_.MainWindowTitle -match 'Coding') }; ^\
+	$procs = Get-Process | Where-Object { $names -contains $_.ProcessName }; ^\
 	if (-not $procs) { break } ^\
 	$procs | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } ^\
 	Start-Sleep -Milliseconds 400 ^\
 } ^\
-$remaining = Get-Process | Where-Object { $names -contains $_.ProcessName -or ($_.MainWindowTitle -and $_.MainWindowTitle -match 'Coding') }; ^\
+$remaining = Get-Process | Where-Object { $names -contains $_.ProcessName }; ^\
 if ($remaining) { Write-Output 'Some CodingCat processes remain. Try running this script as Administrator.'; $remaining | Format-Table Id, ProcessName, MainWindowTitle -AutoSize } else { Write-Output 'Stopped all CodingCat processes.' } ; ^\
-Write-Output 'Removing scheduled tasks named like Coding/Cat (if any)...'; ^\
-Get-ScheduledTask | Where-Object { $_.TaskName -match 'Coding|Cat' } | ForEach-Object { Unregister-ScheduledTask -TaskName $_.TaskName -Confirm:$false -ErrorAction SilentlyContinue } ; ^\
-Write-Output 'Removing Run registry entries (HKCU/HKLM) that match Coding/Cat...'; ^\
-Get-ItemProperty -Path HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run -ErrorAction SilentlyContinue | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty Name | Where-Object { $_ -match 'Coding|Cat' } | ForEach-Object { Remove-ItemProperty -Path HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run -Name $_ -ErrorAction SilentlyContinue } ; ^\
-Get-ItemProperty -Path HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run -ErrorAction SilentlyContinue | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty Name | Where-Object { $_ -match 'Coding|Cat' } | ForEach-Object { Remove-ItemProperty -Path HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run -Name $_ -ErrorAction SilentlyContinue } ; ^\
-Write-Output 'Removing startup shortcuts named like Coding/Cat...'; ^\
-$startup = [Environment]::GetFolderPath('Startup'); Get-ChildItem -Path $startup -Filter '*Coding*' -ErrorAction SilentlyContinue | ForEach-Object { Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue } ; ^\
-$common = [Environment]::GetFolderPath('CommonStartup'); Get-ChildItem -Path $common -Filter '*Coding*' -ErrorAction SilentlyContinue | ForEach-Object { Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue } ; ^\
+Write-Output 'Removing CodingCat/Mewly scheduled tasks (exact names only)...'; ^\
+Get-ScheduledTask | Where-Object { $names -contains $_.TaskName } | ForEach-Object { Unregister-ScheduledTask -TaskName $_.TaskName -Confirm:$false -ErrorAction SilentlyContinue } ; ^\
+Write-Output 'Removing CodingCat/Mewly Run registry entries (HKCU, exact names only)...'; ^\
+Get-ItemProperty -Path HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run -ErrorAction SilentlyContinue | Get-Member -MemberType NoteProperty | Select-Object -ExpandProperty Name | Where-Object { $names -contains $_ } | ForEach-Object { Remove-ItemProperty -Path HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run -Name $_ -ErrorAction SilentlyContinue } ; ^\
+Write-Output 'Removing CodingCat/Mewly startup shortcuts...'; ^\
+$startup = [Environment]::GetFolderPath('Startup'); Get-ChildItem -Path $startup -Filter 'CodingCat*' -ErrorAction SilentlyContinue | ForEach-Object { Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue } ; ^\
+$common = [Environment]::GetFolderPath('CommonStartup'); Get-ChildItem -Path $common -Filter 'CodingCat*' -ErrorAction SilentlyContinue | ForEach-Object { Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue } ; ^\
 Write-Output 'Done.'; pause"
 
 rem Create a Desktop shortcut named "Cancel CodingCat" with hotkey Ctrl+Alt+C

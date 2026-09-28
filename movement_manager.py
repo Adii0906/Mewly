@@ -1,150 +1,136 @@
 """
-CodingCat - Movement Manager  (v2)
+Mewly - Movement Manager
 
-Fixes:
-- set_position() immediately syncs internal float state so drag release
-  doesn't cause the cat to teleport back on the next tick.
-- _start_walk() picks direction toward center of screen to avoid
-  the cat getting stuck at one edge.
-- All position arithmetic is in float; only exposed as int.
+Walking is never spontaneous.  The cat only walks when something asks it to:
+  - the user picks a "Walk" command (context menu / arrow keys), or
+  - the user drops the cat partly outside the screen and it walks back in.
+
+Movement is time based (pixels per second), so speed does not depend on the
+timer rate, and positions are kept as floats to avoid jitter.  Bounds come
+from the monitor the cat is currently on, so multi-monitor setups work.
+
+The position is the window's top-left corner.  All sprite frames share one
+bottom-centre anchor, so moving the window never makes the feet jump.
 """
 from __future__ import annotations
-import random
+
 import logging
-from enum import Enum
+from typing import Callable, Optional, Tuple
 
-from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import QRect
+from PyQt6.QtCore import QPoint, QRect
+from PyQt6.QtGui import QGuiApplication
 
-from config import (
-    WALK_SPEED_MIN, WALK_SPEED_MAX,
-    IDLE_PAUSE_MIN, IDLE_PAUSE_MAX,
-    WALK_DURATION_MIN, WALK_DURATION_MAX,
-    EDGE_MARGIN, PROB_START_WALKING,
-    PROB_SLEEP_FROM_IDLE, PROB_JUMP,
-    CAT_DISPLAY_SIZE,
-)
-from state_manager import CatState
+from config import EDGE_MARGIN
 
-log = logging.getLogger("CodingCat.movement")
+log = logging.getLogger("Mewly.movement")
 
 
-class Direction(Enum):
-    LEFT  = -1
-    RIGHT =  1
+def screen_rect_at(point: QPoint) -> QRect:
+    """Available geometry of the monitor containing *point* (or the primary one)."""
+    screen = QGuiApplication.screenAt(point) or QGuiApplication.primaryScreen()
+    return screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
 
 
 class MovementManager:
     def __init__(self) -> None:
-        self._x:    float = 200.0
-        self._y:    float = 200.0
-        self._dir:  Direction = Direction.RIGHT
-        self._speed: float = random.uniform(WALK_SPEED_MIN, WALK_SPEED_MAX)
+        self._x: float = 200.0
+        self._y: float = 200.0
+        self._w: int = 1
+        self._h: int = 1
+        self._target_x: Optional[float] = None
+        self._speed: float = 0.0
+        # The source art faces left; facing right mirrors flippable animations.
+        self._facing_left: bool = True
+        self._on_arrive: Optional[Callable[[], None]] = None
 
-        self._is_walking:   bool = False
-        self._walk_ticks:   int  = 0
-        self._walk_target:  int  = 0
-        self._idle_ticks:   int  = 0
-        self._idle_target:  int  = random.randint(IDLE_PAUSE_MIN, IDLE_PAUSE_MAX)
-
-    # ── Public ────────────────────────────────────────────────────
+    # ── queries ──────────────────────────────────────────────────
 
     @property
     def x(self) -> int:
-        return int(self._x)
+        return round(self._x)
 
     @property
     def y(self) -> int:
-        return int(self._y)
+        return round(self._y)
+
+    @property
+    def is_walking(self) -> bool:
+        return self._target_x is not None
 
     @property
     def facing_left(self) -> bool:
-        return self._dir == Direction.LEFT
+        return self._facing_left
 
-    def set_position(self, x: int, y: int) -> None:
-        """Called by drag handler — keeps internal state in sync."""
-        self._x = float(x)
-        self._y = float(y)
+    def bounds(self) -> Tuple[int, int]:
+        """Valid [min_x, max_x] for the window's left edge on the current monitor."""
+        scr = self._screen()
+        lo = scr.left() + EDGE_MARGIN
+        hi = scr.right() + 1 - self._w - EDGE_MARGIN
+        return lo, max(lo, hi)
 
-    def tick(self, locked: bool = False) -> CatState:
-        """
-        Advance one master-clock tick.
-        *locked* = True when a productivity/forced state prevents walking.
-        Returns the desired movement state for the state machine.
-        """
-        if locked:
-            self._is_walking = False
-            return CatState.IDLE
+    # ── control ──────────────────────────────────────────────────
 
-        screen = self._screen_rect()
-        return self._do_walk(screen) if self._is_walking else self._do_idle()
+    def set_size(self, w: int, h: int) -> None:
+        self._w, self._h = max(1, w), max(1, h)
 
-    # ── Private ───────────────────────────────────────────────────
+    def set_position(self, x: float, y: float) -> None:
+        """Hard position update (drag, restore, resize).  Does not stop a walk."""
+        self._x, self._y = float(x), float(y)
 
-    def _do_walk(self, screen: QRect) -> CatState:
-        new_x = self._x + self._dir.value * self._speed
+    def walk_to(self, target_x: float, speed_px_s: float,
+                on_arrive: Optional[Callable[[], None]] = None) -> None:
+        lo, hi = self.bounds()
+        target = min(max(float(target_x), lo), hi)
+        if abs(target - self._x) < 1.0:
+            self.stop()
+            return
+        self._target_x = target
+        self._speed = speed_px_s
+        self._facing_left = target < self._x
+        self._on_arrive = on_arrive
+        log.info("Walk  %.0f → %.0f  (%s)", self._x, target, "left" if self._facing_left else "right")
 
-        left_limit  = float(screen.left()  + EDGE_MARGIN)
-        right_limit = float(screen.right() - CAT_DISPLAY_SIZE - EDGE_MARGIN)
+    def walk_by(self, dx: float, speed_px_s: float) -> None:
+        base = self._target_x if self._target_x is not None else self._x
+        self.walk_to(base + dx, speed_px_s)
 
-        if new_x <= left_limit:
-            new_x = left_limit
-            self._dir = Direction.RIGHT
-            log.debug("Edge bounce → RIGHT at x=%.0f", new_x)
-        elif new_x >= right_limit:
-            new_x = right_limit
-            self._dir = Direction.LEFT
-            log.debug("Edge bounce → LEFT  at x=%.0f", new_x)
+    def stop(self) -> None:
+        self._target_x = None
+        self._on_arrive = None
 
-        self._x = new_x
-        self._walk_ticks += 1
-
-        if self._walk_ticks >= self._walk_target:
-            self._is_walking = False
-            self._idle_ticks = 0
-            self._idle_target = random.randint(IDLE_PAUSE_MIN, IDLE_PAUSE_MAX)
-            log.debug("Walk done → IDLE  pos=(%.0f,%.0f)", self._x, self._y)
-            return CatState.IDLE
-
-        return CatState.WALK
-
-    def _do_idle(self) -> CatState:
-        self._idle_ticks += 1
-        r = random.random()
-
-        if r < PROB_JUMP:
-            return CatState.JUMP
-
-        if r < PROB_SLEEP_FROM_IDLE:
-            return CatState.SLEEP
-
-        if self._idle_ticks >= self._idle_target:
-            self._idle_ticks = 0
-            self._idle_target = random.randint(IDLE_PAUSE_MIN, IDLE_PAUSE_MAX)
-            if random.random() < PROB_START_WALKING:
-                self._start_walk()
-
-        return CatState.IDLE
-
-    def _start_walk(self) -> None:
-        screen = self._screen_rect()
-        center_x = screen.center().x()
-
-        # Bias direction toward screen center so cat doesn't hug edges
-        if self._x < center_x - 100:
-            self._dir = Direction.RIGHT
-        elif self._x > center_x + 100:
-            self._dir = Direction.LEFT
+    def update(self, dt_s: float) -> bool:
+        """Advance a walk by *dt_s* seconds.  Returns True if the position changed."""
+        if self._target_x is None or dt_s <= 0:
+            return False
+        step = self._speed * min(dt_s, 0.05)      # cap: no teleport after a stall
+        dist = self._target_x - self._x
+        if abs(dist) <= step:
+            self._x = self._target_x
+            cb = self._on_arrive
+            self.stop()
+            log.info("Walk arrived at x=%.0f", self._x)
+            if cb:
+                cb()
         else:
-            self._dir = random.choice([Direction.LEFT, Direction.RIGHT])
+            self._x += step if dist > 0 else -step
+        return True
 
-        self._is_walking  = True
-        self._walk_ticks  = 0
-        self._walk_target = random.randint(WALK_DURATION_MIN, WALK_DURATION_MAX)
-        self._speed       = random.uniform(WALK_SPEED_MIN, WALK_SPEED_MAX)
-        log.debug("Walk start  dir=%s  speed=%.1f  tgt=%d", self._dir.name, self._speed, self._walk_target)
+    def clamp_vertical(self) -> None:
+        """Keep the whole window vertically on its monitor (after a drop)."""
+        scr = self._screen()
+        top = scr.top()
+        bottom = scr.bottom() + 1 - self._h
+        self._y = float(min(max(self._y, top), max(top, bottom)))
 
-    @staticmethod
-    def _screen_rect() -> QRect:
-        screen = QApplication.primaryScreen()
-        return screen.availableGeometry() if screen else QRect(0, 0, 1920, 1080)
+    def out_of_bounds_x(self) -> Optional[float]:
+        """If the window sticks out horizontally, the x it should walk back to."""
+        lo, hi = self.bounds()
+        if self._x < lo:
+            return float(lo)
+        if self._x > hi:
+            return float(hi)
+        return None
+
+    def _screen(self) -> QRect:
+        center = QPoint(round(self._x + self._w / 2), round(self._y + self._h / 2))
+        return screen_rect_at(center)

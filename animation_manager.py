@@ -1,118 +1,116 @@
 """
-CodingCat - Animation Manager (v3)
+Mewly - Animation Manager (sprite cache)
 
-Slices each animation state from its sprite sheet using pixel-accurate
-coordinates from config.SPRITE_CONFIGS.
+Loads the pre-processed sprite strips from assets/sprites/ (built offline by
+tools/build_sprites.py) and serves scaled QPixmaps for (strip, index, flip).
 
-Each state produces a list of QPixmap frames — one pixmap per frame.
-The renderer (cat_widget) cycles through this list, displaying exactly
-ONE frame at a time.  No all-at-once rendering.  No stacking.
+Rendering rules:
+- Every frame lives on the SAME canvas (manifest cell_w x cell_h) with the
+  cat's feet on a common ground line and centred on a common vertical axis.
+  Drawing every frame at the same position is therefore enough for perfect
+  bottom-centre anchoring — no per-frame offsets at paint time.
+- One uniform scale factor for all frames; aspect ratio is always preserved.
+- Magnification uses nearest-neighbour (crisp pixels).  Minification uses
+  Qt's area-averaging smooth scale: nearest-neighbour *downscaling* drops
+  whole rows/columns of the outline and makes it shimmer between frames.
+- Scaled/flipped pixmaps are built once per display size and cached.
 """
 from __future__ import annotations
-import os
+
+import json
 import logging
-from typing import Dict, List
+import os
+from typing import Dict, List, Tuple
 
-from PIL import Image
-from PyQt6.QtGui import QPixmap, QImage, QTransform
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QImage, QPixmap
 
-from config import SPRITE_CONFIGS, STATE_FALLBACK, CAT_DISPLAY_SIZE, SpriteConfig
+from config import CAT_DISPLAY_SIZE, SPRITES_DIR
 
-log = logging.getLogger("CodingCat.anim")
-
-_ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
-_FLIP   = QTransform().scale(-1, 1)
-
-
-def _remove_black_bg(img: Image.Image) -> Image.Image:
-    """Make all near-black pixels (r<25, g<25, b<25) fully transparent."""
-    img = img.convert("RGBA")
-    data = img.load()
-    for y in range(img.height):
-        for x in range(img.width):
-            r, g, b, a = data[x, y]
-            if r < 25 and g < 25 and b < 25:
-                data[x, y] = (0, 0, 0, 0)
-    return img
-
-
-def _to_pixmap(img: Image.Image, size: int) -> QPixmap:
-    img = img.resize((size, size), Image.LANCZOS)
-    raw = img.tobytes("raw", "RGBA")
-    qi  = QImage(raw, img.width, img.height, QImage.Format.Format_RGBA8888)
-    return QPixmap.fromImage(qi)
+log = logging.getLogger("Mewly.sprites")
 
 
 class AnimationManager:
-    """
-    Loads sprite sheets once, slices every state into a list of QPixmaps.
-    get_frames(state) returns that list — the renderer picks one at a time.
-    """
+    def __init__(self, display_size: int = CAT_DISPLAY_SIZE, sprites_dir: str = SPRITES_DIR) -> None:
+        with open(os.path.join(sprites_dir, "manifest.json"), encoding="utf-8") as f:
+            self._manifest = json.load(f)
+        self.cell_w: int = self._manifest["cell_w"]
+        self.cell_h: int = self._manifest["cell_h"]
 
-    def __init__(self, display_size: int = CAT_DISPLAY_SIZE) -> None:
-        self.display_size = display_size
-        self._normal:  Dict[str, List[QPixmap]] = {}
-        self._flipped: Dict[str, List[QPixmap]] = {}
-        self._sheets:  Dict[str, Image.Image]   = {}
-        self._load_sheets()
-        self._slice_all()
-        log.info("AnimationManager ready — states: %s", list(self._normal.keys()))
+        # Native-resolution frames, sliced once.
+        self._native: Dict[str, List[QImage]] = {}
+        for name, info in self._manifest["animations"].items():
+            path = os.path.join(sprites_dir, info["file"])
+            strip = QImage(path)
+            if strip.isNull():
+                log.error("Sprite strip missing or unreadable: %s", path)
+                continue
+            strip = strip.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+            self._native[name] = [
+                strip.copy(i * self.cell_w, 0, self.cell_w, self.cell_h)
+                for i in range(info["frames"])
+            ]
+        log.info("Sprites loaded: %s", {k: len(v) for k, v in self._native.items()})
+
+        self._cache: Dict[Tuple[str, int, bool], QPixmap] = {}
+        self._dpr: float = 1.0
+        self.display_size = 0
+        self.set_display_size(display_size)
 
     # ── public ────────────────────────────────────────────────────
 
-    def get_frames(self, state: str, flip: bool = False) -> List[QPixmap]:
-        key = STATE_FALLBACK.get(state, state)
-        src = self._flipped if flip else self._normal
-        frames = src.get(key) or src.get("idle", [])
-        if not frames:
-            log.warning("No frames for state='%s' flip=%s", state, flip)
-        return frames
+    @property
+    def sprite_width(self) -> int:
+        return max(1, round(self.cell_w * self.display_size / self.cell_h))
 
-    def available_states(self) -> List[str]:
-        return list(self._normal.keys())
+    @property
+    def sprite_height(self) -> int:
+        return self.display_size
+
+    def set_display_size(self, size: int) -> None:
+        if size == self.display_size:
+            return
+        self.display_size = max(1, int(size))
+        self._cache.clear()
+
+    def set_device_pixel_ratio(self, dpr: float) -> None:
+        """Build pixmaps at physical resolution so HiDPI scaling adds no blur."""
+        dpr = max(1.0, float(dpr))
+        if abs(dpr - self._dpr) > 1e-3:
+            self._dpr = dpr
+            self._cache.clear()
+
+    def pixmap(self, strip: str, index: int, flip: bool = False) -> QPixmap:
+        key = (strip, index, flip)
+        pm = self._cache.get(key)
+        if pm is None:
+            pm = self._build(strip, index, flip)
+            self._cache[key] = pm
+        return pm
+
+    def has_strip(self, strip: str) -> bool:
+        return strip in self._native
 
     # ── private ───────────────────────────────────────────────────
 
-    def _load_sheets(self) -> None:
-        for key, fname in [("basic", "sprite_basic.png"),
-                            ("coding", "sprite_coding.png")]:
-            path = os.path.join(_ASSETS, fname)
-            if os.path.exists(path):
-                self._sheets[key] = Image.open(path).convert("RGBA")
-                log.debug("Sheet '%s' loaded (%s)", key, path)
-            else:
-                log.error("Sheet NOT found: %s", path)
-
-    def _slice_all(self) -> None:
-        for state, cfg in SPRITE_CONFIGS.items():
-            sheet = self._sheets.get(cfg.sheet)
-            if sheet is None:
-                continue
-            frames = self._slice_state(sheet, cfg)
-            if frames:
-                self._normal[state]  = frames
-                self._flipped[state] = [f.transformed(_FLIP) for f in frames]
-                log.debug("  %-7s  %d frames  slot_w=%d  x_start=%d",
-                          state, len(frames), cfg.slot_w, cfg.x_start)
-            else:
-                log.warning("  %-7s  0 frames — skipped", state)
-
-    def _slice_state(self, sheet: Image.Image, cfg: SpriteConfig) -> List[QPixmap]:
-        frames: List[QPixmap] = []
-        for i in range(cfg.num_frames):
-            x0 = cfg.x_start + i * cfg.slot_w
-            y0 = cfg.row_y
-            x1 = x0 + cfg.slot_w
-            y1 = y0 + cfg.row_h
-
-            if x1 > sheet.width or y1 > sheet.height:
-                log.warning("  %s frame %d out of bounds (x1=%d, sheet_w=%d)",
-                            cfg.sheet, i, x1, sheet.width)
-                break
-
-            crop   = sheet.crop((x0, y0, x1, y1))
-            crop   = _remove_black_bg(crop)
-            pixmap = _to_pixmap(crop, self.display_size)
-            frames.append(pixmap)
-
-        return frames
+    def _build(self, strip: str, index: int, flip: bool) -> QPixmap:
+        frames = self._native.get(strip) or self._native.get("idle")
+        if not frames:
+            pm = QPixmap(self.sprite_width, self.sprite_height)
+            pm.fill(Qt.GlobalColor.transparent)
+            return pm
+        img = frames[index % len(frames)]
+        if flip:
+            # The canvas is symmetric around the anchor axis, so a mirrored
+            # frame keeps the cat's feet exactly where they were.
+            img = img.mirrored(True, False)
+        # Physical pixel size; the logical size stays sprite_width x sprite_height.
+        w = max(1, round(self.sprite_width * self._dpr))
+        h = max(1, round(self.sprite_height * self._dpr))
+        if (w, h) != (img.width(), img.height()):
+            mode = (Qt.TransformationMode.FastTransformation if h >= img.height()
+                    else Qt.TransformationMode.SmoothTransformation)
+            img = img.scaled(w, h, Qt.AspectRatioMode.IgnoreAspectRatio, mode)
+        pm = QPixmap.fromImage(img)
+        pm.setDevicePixelRatio(self._dpr)
+        return pm

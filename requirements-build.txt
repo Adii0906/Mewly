@@ -1,0 +1,7 @@
+# Everything needed to build dist\Mewly.exe (build.bat installs this into
+# a fresh, isolated .build-venv).
+-r requirements.txt
+pyinstaller>=6.10
+pyinstaller-hooks-contrib>=2024.8
+# icon generation (utils/icon_gen.py) and tools/build_sprites.py
+Pillow>=10.0.0

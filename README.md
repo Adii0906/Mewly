@@ -72,7 +72,28 @@ dist/
 └── Mewly.exe
 ```
 
-No installation required.
+`Mewly.exe` is a single self-contained 64-bit file: Python, PyQt6/Qt, the
+Microsoft C++ runtime and all assets are inside. Users just download and run
+it; there's nothing to install and no environment setup.
+
+What `build.bat` does (needs 64-bit Python 3.10+ from python.org on the
+build PC only):
+
+1. Deletes old `build/`, `dist/` and the previous build environment.
+2. Creates a fresh `.build-venv` and installs `requirements-build.txt` into it,
+   with a PATH that contains only Windows (so no stray DLLs from the developer
+   machine can end up in the exe).
+3. Checks the environment (`tools/check_build_env.py`): 64-bit, matching
+   PyQt6 / PyQt6-Qt6 versions, no second Qt binding, no conda Python.
+4. Builds from `Mewly.spec`. The spec ships one consistent, newest copy of the
+   MSVC runtime DLLs (`tools/pyinstaller/msvc_runtime.py`), and a runtime hook
+   (`tools/pyinstaller/rthook_mewly.py`) makes the exe use only its bundled
+   DLLs.
+5. Runs `dist\Mewly.exe --self-test` with a bare Windows PATH and fails the
+   build if Qt, the platform plugin, sprites, tray icon or activity monitoring
+   don't load.
+
+Use `build.bat /norun` for scripted/CI builds.
 
 ---
 

@@ -9,9 +9,10 @@ from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QSlider, QSpinBox, QPushButton, QGroupBox,
     QCheckBox, QFormLayout, QSizePolicy, QComboBox,
+    QFrame, QScrollArea, QWidget,
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QGuiApplication
 from config import (
     MIN_FPS, MAX_FPS, MIN_DISPLAY_SIZE, MAX_DISPLAY_SIZE,
     MIN_SLEEP_AFTER_SECS, MAX_SLEEP_AFTER_SECS,
@@ -50,43 +51,53 @@ class SettingsDialog(QDialog):
         self.auto_move = auto_move
         self._on_play_animation = on_play_animation
         self.setWindowTitle("Mewly ⚙ Settings")
-        self.setMinimumWidth(380)
         self.setStyleSheet("""
             QDialog { background:#1e1e2e; color:#cdd6f4; }
             QLabel  { color:#cdd6f4; }
-            QGroupBox { color:#89b4fa; border:1px solid #313244;
-                        border-radius:6px; margin-top:8px; padding:8px; }
-            QGroupBox::title { subcontrol-origin:margin; padding:0 4px; }
+            QGroupBox { color:#89b4fa; font-weight:bold; border:1px solid #313244;
+                        border-radius:6px; margin-top:10px; padding:10px 8px 6px 8px; }
+            QGroupBox::title { subcontrol-origin:margin; left:8px; padding:0 4px; }
             QPushButton { background:#313244; color:#cdd6f4; border:none;
                           border-radius:4px; padding:6px 16px; }
             QPushButton:hover  { background:#45475a; }
-            QPushButton#save   { background:#89b4fa; color:#1e1e2e; }
+            QPushButton#save   { background:#89b4fa; color:#1e1e2e; font-weight:bold; }
             QPushButton#save:hover { background:#b4befe; }
             QSpinBox  { background:#313244; color:#cdd6f4; border:1px solid #45475a;
-                        border-radius:4px; padding:2px 6px; }
+                        border-radius:4px; padding:2px 6px; min-height:20px; }
             QSlider::groove:horizontal { background:#313244; height:6px; border-radius:3px; }
             QSlider::handle:horizontal { background:#89b4fa; width:14px; height:14px;
                                          border-radius:7px; margin:-4px 0; }
             QCheckBox { color:#cdd6f4; }
             QComboBox { background:#313244; color:#cdd6f4; border:1px solid #45475a;
-                        border-radius:4px; padding:2px 6px; }
+                        border-radius:4px; padding:2px 6px; min-height:20px; }
             QComboBox QAbstractItemView { background:#313244; color:#cdd6f4;
                                           selection-background-color:#45475a; }
+            QScrollArea, QScrollArea > QWidget > QWidget { background:transparent; border:none; }
         """)
         self._build()
+        self._fit_to_screen()
+
+    @staticmethod
+    def _form(group: QGroupBox) -> QFormLayout:
+        form = QFormLayout(group)
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(7)
+        form.setContentsMargins(4, 4, 4, 2)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        return form
 
     def _build(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setSpacing(12)
+        # Two columns of groups keep the window short; the Save/Cancel footer
+        # sits outside the (rarely needed) scroll area so it is always visible.
+        left = QVBoxLayout()
+        left.setSpacing(8)
+        right = QVBoxLayout()
+        right.setSpacing(8)
 
-        title = QLabel("⚙  Settings")
-        title.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
-        title.setStyleSheet("color:#89b4fa;")
-        layout.addWidget(title)
-
-        # ── Display ──────────────────────────────────────────────
+        # ── Display (left) ───────────────────────────────────────
         disp_group = QGroupBox("Display")
-        form = QFormLayout(disp_group)
+        form = self._form(disp_group)
 
         self.fps_spin = QSpinBox()
         self.fps_spin.setRange(MIN_FPS, MAX_FPS)
@@ -103,11 +114,11 @@ class SettingsDialog(QDialog):
         self.aot_check = QCheckBox("Always on top")
         self.aot_check.setChecked(self.settings.always_on_top)
         form.addRow("", self.aot_check)
-        layout.addWidget(disp_group)
+        left.addWidget(disp_group)
 
-        # ── Behaviour ────────────────────────────────────────────
+        # ── Behaviour (left) ─────────────────────────────────────
         beh_group = QGroupBox("Behaviour")
-        bform = QFormLayout(beh_group)
+        bform = self._form(beh_group)
         self.sleep_spin = QSpinBox()
         self.sleep_spin.setRange(MIN_SLEEP_AFTER_SECS, MAX_SLEEP_AFTER_SECS)
         self.sleep_spin.setSingleStep(15)
@@ -115,30 +126,31 @@ class SettingsDialog(QDialog):
         self.sleep_spin.setValue(self.settings.sleep_after_secs)
         self.sleep_spin.setToolTip("No keyboard/mouse input for this long → the cat falls asleep")
         bform.addRow("Sleep after:", self.sleep_spin)
-        layout.addWidget(beh_group)
+        left.addWidget(beh_group)
 
-        # ── Animation ────────────────────────────────────────────
-        anim_group = QGroupBox("Animation")
-        arow = QHBoxLayout(anim_group)
-        self.anim_combo = QComboBox()
-        for name, label in PREVIEW_ANIMATIONS.items():
-            self.anim_combo.addItem(label, name)
-        arow.addWidget(QLabel("Play:"))
-        arow.addWidget(self.anim_combo, 1)
-        play_btn = QPushButton("▶")
-        play_btn.setToolTip("Play the chosen animation on Mewly")
-        play_btn.clicked.connect(self._play_animation)
-        play_btn.setEnabled(self._on_play_animation is not None)
-        arow.addWidget(play_btn)
-        layout.addWidget(anim_group)
+        # ── Pomodoro (left) ──────────────────────────────────────
+        pomo_group = QGroupBox("🍅  Pomodoro")
+        pform = self._form(pomo_group)
 
-        # ── Movement ─────────────────────────────────────────────
+        self.work_spin = QSpinBox()
+        self.work_spin.setRange(1, 90)
+        self.work_spin.setValue(self.settings.pomodoro_work_mins)
+        pform.addRow("Work (mins):", self.work_spin)
+
+        self.break_spin = QSpinBox()
+        self.break_spin.setRange(1, 30)
+        self.break_spin.setValue(self.settings.pomodoro_break_mins)
+        pform.addRow("Break (mins):", self.break_spin)
+        left.addWidget(pomo_group)
+        left.addStretch()
+
+        # ── Movement (right) ─────────────────────────────────────
         move_group = QGroupBox("🐾  Movement")
-        mform = QFormLayout(move_group)
+        mform = self._form(move_group)
         self.auto_check = QCheckBox("Auto-move (follows your activity)")
         self.auto_check.setChecked(self.auto_move)
         self.auto_check.setToolTip("Off = manual: Mewly stays where you put it (right-drag)")
-        mform.addRow("", self.auto_check)
+        mform.addRow(self.auto_check)
         self.move_combos = {}
         current = self.settings.movement
         for activity, label in (("code", "When coding:"), ("idle", "When idle:"),
@@ -151,34 +163,74 @@ class SettingsDialog(QDialog):
             mform.addRow(label, combo)
         self.auto_check.toggled.connect(self._update_movement_enabled)
         self._update_movement_enabled(self.auto_check.isChecked())
-        layout.addWidget(move_group)
+        right.addWidget(move_group)
 
-        # ── Pomodoro ─────────────────────────────────────────────
-        pomo_group = QGroupBox("🍅  Pomodoro")
-        pform = QFormLayout(pomo_group)
+        # ── Animation (right) ────────────────────────────────────
+        anim_group = QGroupBox("Animation")
+        arow = QHBoxLayout(anim_group)
+        arow.setContentsMargins(4, 4, 4, 2)
+        arow.setSpacing(8)
+        self.anim_combo = QComboBox()
+        for name, label in PREVIEW_ANIMATIONS.items():
+            self.anim_combo.addItem(label, name)
+        arow.addWidget(QLabel("Play:"))
+        arow.addWidget(self.anim_combo, 1)
+        play_btn = QPushButton("▶")
+        play_btn.setToolTip("Play the chosen animation on Mewly")
+        play_btn.setFixedWidth(40)
+        play_btn.clicked.connect(self._play_animation)
+        play_btn.setEnabled(self._on_play_animation is not None)
+        arow.addWidget(play_btn)
+        right.addWidget(anim_group)
+        right.addStretch()
 
-        self.work_spin = QSpinBox()
-        self.work_spin.setRange(1, 90)
-        self.work_spin.setValue(self.settings.pomodoro_work_mins)
-        pform.addRow("Work (mins):", self.work_spin)
+        columns = QHBoxLayout()
+        columns.setSpacing(12)
+        columns.setContentsMargins(0, 0, 0, 0)
+        columns.addLayout(left, 1)
+        columns.addLayout(right, 1)
 
-        self.break_spin = QSpinBox()
-        self.break_spin.setRange(1, 30)
-        self.break_spin.setValue(self.settings.pomodoro_break_mins)
-        pform.addRow("Break (mins):", self.break_spin)
-        layout.addWidget(pomo_group)
+        body = QWidget()
+        body.setLayout(columns)
+        self._scroll = QScrollArea()
+        self._scroll.setWidget(body)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        body.setAutoFillBackground(False)             # keep the dark dialog background
+        self._scroll.viewport().setAutoFillBackground(False)
 
-        # ── Buttons ───────────────────────────────────────────────
+        # ── Buttons (always visible) ─────────────────────────────
         btn_row = QHBoxLayout()
         cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(self.reject)
         save_btn = QPushButton("Save")
         save_btn.setObjectName("save")
+        save_btn.setDefault(True)
         save_btn.clicked.connect(self._save)
-        btn_row.addWidget(cancel_btn)
         btn_row.addStretch()
+        btn_row.addWidget(cancel_btn)
         btn_row.addWidget(save_btn)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 10, 14, 12)
+        layout.setSpacing(10)
+        layout.addWidget(self._scroll, 1)
         layout.addLayout(btn_row)
+
+    def _fit_to_screen(self) -> None:
+        """Size to the content, but never taller/wider than the screen allows."""
+        body = self._scroll.widget()
+        want = body.sizeHint()
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen else None
+        footer = 60                                  # buttons + margins
+        w = want.width() + 32
+        h = want.height() + footer
+        if avail is not None:
+            w = min(w, int(avail.width() * 0.9))
+            h = min(h, int(avail.height() * 0.85))
+        self.resize(max(w, 520), h)
 
     def _save(self) -> None:
         self.settings.fps              = self.fps_spin.value()

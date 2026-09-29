@@ -14,6 +14,7 @@ from config import (
     POMODORO_WORK_MINS, POMODORO_BREAK_MINS,
     DEFAULT_SLEEP_AFTER_SECS, MIN_SLEEP_AFTER_SECS, MAX_SLEEP_AFTER_SECS,
 )
+from positioning import DEFAULT_MOVEMENT, MOVEMENT_CHOICES
 from storage import get_setting, set_setting
 
 
@@ -28,6 +29,19 @@ class Settings:
     display_size: int = CAT_DISPLAY_SIZE
     always_on_top: bool = True
     sleep_after_secs: int = DEFAULT_SLEEP_AFTER_SECS
+    show_intro: bool = True                 # first-launch introduction window
+    move_code: str = DEFAULT_MOVEMENT["code"]    # movement keyword while coding
+    move_idle: str = DEFAULT_MOVEMENT["idle"]    # ...while idle
+    move_break: str = DEFAULT_MOVEMENT["break"]  # ...on a Pomodoro break
+
+    @property
+    def movement(self) -> dict:
+        return {"code": self.move_code, "idle": self.move_idle, "break": self.move_break}
+
+
+def _choice(key: str, activity: str) -> str:
+    value = str(get_setting(key, DEFAULT_MOVEMENT[activity]))
+    return value if value in MOVEMENT_CHOICES[activity] else DEFAULT_MOVEMENT[activity]
 
 
 def _int(key: str, default: int, lo: int, hi: int) -> int:
@@ -56,6 +70,10 @@ class SettingsManager:
         s.always_on_top       = str(get_setting("always_on_top", "1")) == "1"
         s.sleep_after_secs    = _int("sleep_after", s.sleep_after_secs,
                                      MIN_SLEEP_AFTER_SECS, MAX_SLEEP_AFTER_SECS)
+        s.show_intro          = str(get_setting("show_intro", "1")) == "1"
+        s.move_code           = _choice("move_code", "code")
+        s.move_idle           = _choice("move_idle", "idle")
+        s.move_break          = _choice("move_break", "break")
 
     def save(self) -> None:
         s = self.settings
@@ -68,3 +86,7 @@ class SettingsManager:
         set_setting("display_size", s.display_size)
         set_setting("always_on_top", "1" if s.always_on_top else "0")
         set_setting("sleep_after", s.sleep_after_secs)
+        set_setting("show_intro", "1" if s.show_intro else "0")
+        set_setting("move_code",  s.move_code)
+        set_setting("move_idle",  s.move_idle)
+        set_setting("move_break", s.move_break)

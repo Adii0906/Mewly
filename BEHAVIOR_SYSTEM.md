@@ -88,6 +88,12 @@ isn't already there:
 | BREAK | Center |
 | SLEEP | Stays where it is |
 
+These are the defaults. **Settings → Movement** maps each activity to a
+movement keyword: coding → `beside my window` / `left` / `center` / `right` /
+`stay`; idle and break → `center` / `left` / `right` / `stay`. SLEEP always
+stays put. The keywords are stored as the `move_code`, `move_idle` and
+`move_break` settings.
+
 Triggers (nothing else moves the cat automatically):
 - a **base-state change** (e.g. IDLE → CODE, SLEEP → wake), and
 - a **foreground-window switch** that stays active for 2.5 s

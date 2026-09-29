@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from typing import Optional
 
 # ── Logging (~/.coding_cat/cat.log + console).  MEWLY_DEBUG=1 for verbose. ──
 _LOG_DIR = os.path.join(os.path.expanduser("~"), ".coding_cat")
@@ -44,7 +45,7 @@ def _fatal(title: str, message: str) -> None:
 
 
 try:
-    from PyQt6.QtCore import QPoint, QTimer          # noqa: E402
+    from PyQt6.QtCore import QPoint, Qt, QTimer      # noqa: E402
     from PyQt6.QtGui import QGuiApplication           # noqa: E402
     from PyQt6.QtWidgets import QApplication, QMenu   # noqa: E402
 except ImportError as _exc:
@@ -67,6 +68,7 @@ from movement_manager import MovementManager      # noqa: E402
 from productivity_manager import ProductivityManager  # noqa: E402
 from settings_dialog import SettingsDialog        # noqa: E402
 from settings_manager import SettingsManager      # noqa: E402
+from intro_dialog import IntroDialog              # noqa: E402
 from positioning import WindowGeometry, target_zone  # noqa: E402
 from state_manager import CatBehavior, CatState   # noqa: E402
 from storage import init_db                       # noqa: E402
@@ -156,6 +158,11 @@ class CodingCatApp:
         self._save_timer.start(AUTOSAVE_MS)
         app.aboutToQuit.connect(self._shutdown)
 
+        # ── first-launch introduction (until "Don't show this again") ──
+        self._intro: Optional[IntroDialog] = None
+        if cfg.show_intro:
+            QTimer.singleShot(600, self._show_intro)   # let the cat appear first
+
     # ── public trigger API ───────────────────────────────────────
 
     def trigger_task_completed(self) -> None:
@@ -189,7 +196,7 @@ class CodingCatApp:
         if state in (CatState.CODE, CatState.FOCUS):
             fg = self._geometry.foreground_rect(os.getpid())
             work = self._geometry.work_rect(int(self._cat.winId())) if fg else None
-        zone = target_zone(state, fg, work)
+        zone = target_zone(state, fg, work, self._settings_mgr.settings.movement)
         if zone and self._cat.auto_move(zone):
             log.info("Auto-move → %s  (%s, trigger=%s)", zone, state.value, trigger)
 
@@ -242,6 +249,7 @@ class CodingCatApp:
             menu.addAction("▶ Start Pomodoro", self._start_pomodoro)
         menu.addSeparator()
         menu.addAction("⚙  Settings", self._open_settings)
+        menu.addAction("❔ How Mewly works", self._show_intro)
         menu.addSeparator()
         menu.addAction("✖  Exit", self._quit)
         menu.exec(pos)
@@ -260,7 +268,8 @@ class CodingCatApp:
 
     def _open_settings(self) -> None:
         cfg = self._settings_mgr.settings
-        dlg = SettingsDialog(cfg)
+        dlg = SettingsDialog(cfg, auto_move=not self._cat.is_manual,
+                             on_play_animation=self._play_animation)
         if dlg.exec():
             self._settings_mgr.save()
             self._cat.set_fps(cfg.fps)
@@ -268,7 +277,37 @@ class CodingCatApp:
             self._cat.set_always_on_top(cfg.always_on_top)
             self._prod_mgr.set_pomodoro_times(cfg.pomodoro_work_mins, cfg.pomodoro_break_mins)
             self._prod_mgr.set_sleep_after(cfg.sleep_after_secs)
+            if dlg.auto_move == self._cat.is_manual:
+                self._cat.set_manual(not dlg.auto_move)
+            self._reposition("settings")          # movement keywords may have changed
             log.info("Settings applied")
+
+    def _play_animation(self, name: str) -> None:
+        """Settings → Animation → ▶: play the chosen animation on the cat."""
+        if self._behavior.trigger(name) and name == "heart":
+            self._cat.show_hearts()
+
+    # ── first-launch introduction ────────────────────────────────
+
+    def _show_intro(self) -> None:
+        if self._intro is not None:
+            self._intro.raise_()
+            self._intro.activateWindow()
+            return
+        pic = self._anim_mgr.pixmap("idle", 0)
+        pic = pic.scaledToHeight(round(84 * pic.devicePixelRatio()),
+                                 Qt.TransformationMode.SmoothTransformation)
+        self._intro = IntroDialog(pic)
+        self._intro.finished.connect(self._on_intro_closed)
+        self._intro.show()
+
+    def _on_intro_closed(self, _result: int) -> None:
+        dlg, self._intro = self._intro, None
+        cfg = self._settings_mgr.settings
+        if dlg is not None and dlg.dont_show_again and cfg.show_intro:
+            cfg.show_intro = False
+            self._settings_mgr.save()
+            log.info("Introduction disabled for future launches")
 
     def _restore_position(self, x: int, y: int) -> tuple[int, int]:
         """Use the saved position if it is still on a monitor, else bottom-right of primary."""

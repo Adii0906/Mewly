@@ -88,6 +88,12 @@ class _WinApi:
         except Exception:
             return None
 
+    def foreground_window(self) -> int:
+        try:
+            return int(self._user32.GetForegroundWindow() or 0)
+        except Exception:
+            return 0
+
     def foreground_pid(self) -> Optional[int]:
         try:
             hwnd = self._user32.GetForegroundWindow()
@@ -103,6 +109,7 @@ class ProductivityManager(QObject):
     state_changed = pyqtSignal(object)             # CatState
     pomodoro_tick = pyqtSignal(int, int, str)       # remaining_secs, total_secs, phase
     pomodoro_event = pyqtSignal(str)                # "work_started" | "work_done" | "break_done" | "stopped"
+    foreground_changed = pyqtSignal()               # the active window switched (Windows only)
 
     def __init__(self, sleep_after_secs: int = DEFAULT_SLEEP_AFTER_SECS, parent=None) -> None:
         super().__init__(parent)
@@ -122,6 +129,7 @@ class ProductivityManager(QObject):
         self._exe_by_pid: Dict[int, str] = {}
         self._ide_running = False
         self._last_ide_scan = float("-inf")
+        self._last_foreground = 0
 
         self._win: Optional[_WinApi] = None
         if sys.platform == "win32":
@@ -238,6 +246,11 @@ class ProductivityManager(QObject):
         ))
         if new != old:
             self.state_changed.emit(new)
+        if self._win is not None:
+            hwnd = self._win.foreground_window()
+            if hwnd != self._last_foreground:
+                self._last_foreground = hwnd
+                self.foreground_changed.emit()
         self._flush_stats()
 
     def _drain_keys(self, now: float, in_ide: Optional[bool]) -> None:

@@ -71,15 +71,48 @@ higher-priority one.
 - Clicking a **sleeping** cat wakes it up (the wake animation is the reaction).
 - Click texts cycle in a fixed order.
 
-## Walking
+## Movement: automatic (default) and manual
 
-The cat never wanders. It walks only when:
-- you choose **Walk to… ▸ Left edge / Center / Right edge** in the menu,
-- you press **← / →** while the cat has focus (click it first), or
-- you drop it partly outside the monitor: it walks back in.
+The cat never wanders. Every move has a trigger.
+
+### Automatic mode (default)
+
+The monitor's work area is split into thirds: **left**, **center**, **right**.
+The cat walks to the right third for the current activity, and only if it
+isn't already there:
+
+| Base state | Where the cat goes |
+|---|---|
+| CODE / FOCUS | Beside the active window, on the side with more free space. If the window fills the screen: right. (Windows only; elsewhere: right.) |
+| IDLE | Center |
+| BREAK | Center |
+| SLEEP | Stays where it is |
+
+Triggers (nothing else moves the cat automatically):
+- a **base-state change** (e.g. IDLE → CODE, SLEEP → wake), and
+- a **foreground-window switch** that stays active for 2.5 s
+  (`WINDOW_SETTLE_MS`), so alt-tabbing through windows doesn't send the cat
+  back and forth.
+
+A left-button drag still moves the cat. In automatic mode, that spot is kept
+until the next base-state change (window switches are ignored until then).
+
+### Manual mode (right mouse button)
+
+- **Right-drag** the cat to place it. This switches to manual mode and the cat
+  stays exactly where you put it.
+- **Right-click → 📍 Walk to… ▸ Left edge / Center / Right edge** walks there
+  and switches to manual mode. The **← / →** keys work the same way.
+- **Right-click → 🐾 Auto-move** toggles between automatic and manual mode.
+
+Manual mode lasts until you turn Auto-move back on, or until the cat wakes up
+after SLEEP (you were away), when automatic positioning resumes.
+
+### Walking details
 
 While walking, a click reaction pauses the walk; the walk resumes afterwards.
-Dragging cancels a walk. The walk sprite faces the direction of travel.
+Dragging cancels a walk. The walk sprite faces the direction of travel. If you
+drop the cat partly outside the monitor, it walks back in.
 
 ## Pomodoro
 

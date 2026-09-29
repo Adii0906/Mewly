@@ -62,11 +62,12 @@ except ImportError as _exc:
 
 from animation_manager import AnimationManager    # noqa: E402
 from cat_widget import CatWidget                  # noqa: E402
-from config import APP_NAME, APP_VERSION, AUTOSAVE_MS, EDGE_MARGIN  # noqa: E402
+from config import APP_NAME, APP_VERSION, AUTOSAVE_MS, EDGE_MARGIN, WINDOW_SETTLE_MS  # noqa: E402
 from movement_manager import MovementManager      # noqa: E402
 from productivity_manager import ProductivityManager  # noqa: E402
 from settings_dialog import SettingsDialog        # noqa: E402
 from settings_manager import SettingsManager      # noqa: E402
+from positioning import WindowGeometry, target_zone  # noqa: E402
 from state_manager import CatBehavior, CatState   # noqa: E402
 from storage import init_db                       # noqa: E402
 from tray_manager import TrayManager              # noqa: E402
@@ -138,6 +139,17 @@ class CodingCatApp:
         self._prod_mgr.pomodoro_tick.connect(self._on_pomodoro_tick)
         self._prod_mgr.pomodoro_event.connect(self._on_pomodoro_event)
 
+        # ── automatic positioning (default) ──────────────────────
+        # Re-evaluated only on a base-state change or a window switch that
+        # stays put for WINDOW_SETTLE_MS (so alt-tabbing through windows
+        # doesn't send the cat back and forth).
+        self._geometry = WindowGeometry()
+        self._window_settle = QTimer()
+        self._window_settle.setSingleShot(True)
+        self._window_settle.setInterval(WINDOW_SETTLE_MS)
+        self._window_settle.timeout.connect(lambda: self._reposition("window"))
+        self._prod_mgr.foreground_changed.connect(self._window_settle.start)
+
         # ── autosave & shutdown ──────────────────────────────────
         self._save_timer = QTimer()
         self._save_timer.timeout.connect(self._autosave)
@@ -158,7 +170,33 @@ class CodingCatApp:
     # ── callbacks ─────────────────────────────────────────────────
 
     def _on_activity_state(self, state: CatState) -> None:
+        was_asleep = self._behavior.base == CatState.SLEEP
         self._behavior.set_base(state)
+        if was_asleep and state != CatState.SLEEP and self._cat.is_manual:
+            # Back after a long absence: automatic positioning resumes.
+            self._cat.set_manual(False, announce=False)
+        self._cat.clear_auto_hold()
+        self._reposition("state")
+
+    def _reposition(self, trigger: str) -> None:
+        """Automatic mode: move the cat to where the current activity puts it."""
+        if self._cat.is_manual or not self._cat.isVisible():
+            return
+        if trigger == "window" and self._cat.auto_hold:
+            return                     # the user just dragged it; wait for a state change
+        state = self._behavior.base
+        fg = work = None
+        if state in (CatState.CODE, CatState.FOCUS):
+            fg = self._geometry.foreground_rect(os.getpid())
+            work = self._geometry.work_rect(int(self._cat.winId())) if fg else None
+        zone = target_zone(state, fg, work)
+        if zone and self._cat.auto_move(zone):
+            log.info("Auto-move → %s  (%s, trigger=%s)", zone, state.value, trigger)
+
+    def _set_auto_move(self, enabled: bool) -> None:
+        self._cat.set_manual(not enabled)
+        if enabled:
+            self._reposition("menu")
 
     def _on_pomodoro_tick(self, remaining: int, _total: int, phase: str) -> None:
         self._tray.update_pomodoro_label(remaining, phase)
@@ -186,7 +224,13 @@ class CodingCatApp:
         menu.addAction("✅ Task Done", self.trigger_task_completed)
         menu.addAction("🐛 Debug Mode", self.trigger_debug_mode)
         menu.addSeparator()
-        walk = menu.addMenu("🐾 Walk to…")
+        auto = menu.addAction("🐾 Auto-move (follows your activity)")
+        auto.setCheckable(True)
+        auto.setChecked(not self._cat.is_manual)
+        auto.triggered.connect(self._set_auto_move)
+        hint = menu.addAction("🖐 Right-drag the cat to place it")
+        hint.setEnabled(False)
+        walk = menu.addMenu("📍 Walk to…")
         walk.setStyleSheet(_MENU_STYLE)
         walk.addAction("◀ Left edge", lambda: self._cat.walk_to_edge("left"))
         walk.addAction("● Center", lambda: self._cat.walk_to_edge("center"))

@@ -6,6 +6,12 @@ A cute pixel-art desktop cat that lives on your screen, reacts to your coding ac
 
 ---
 
+## 🐈‍⬛ Download Mewly
+
+**Windows:** [Download Mewly v1.0.0](https://github.com/Adii0906/Mewly/releases/download/v1.0.0/Mewly.exe)
+
+Download the `.exe`, run it, and Mewly will appear on your desktop. No Python or additional setup required.
+
 ## Overview
 
 Mewly is a lightweight desktop pet for Windows that sits on your screen, reacts to your activity, and changes its behavior based on what you're doing.

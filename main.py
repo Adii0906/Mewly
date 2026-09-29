@@ -121,6 +121,8 @@ class CodingCatApp:
         x, y = self._restore_position(cfg.pos_x, cfg.pos_y)
         self._cat.move_to(x, y)
         self._cat.set_always_on_top(cfg.always_on_top)
+        if not cfg.auto_move:
+            self._cat.set_manual(True, announce=False)     # Automatic Movement off
         self._cat.show()
         self._cat.show_reaction("Hi! Right-click me")
         log.info("Cat window shown at (%d, %d)", x, y)
@@ -179,8 +181,13 @@ class CodingCatApp:
     def _on_activity_state(self, state: CatState) -> None:
         was_asleep = self._behavior.base == CatState.SLEEP
         self._behavior.set_base(state)
-        if was_asleep and state != CatState.SLEEP and self._cat.is_manual:
-            # Back after a long absence: automatic positioning resumes.
+        if state == CatState.SLEEP:
+            # User away → Mewly takes a break: automatic movement pauses.
+            self._cat.pause_auto_walk()
+        elif (was_asleep and self._cat.is_manual
+              and self._settings_mgr.settings.auto_move):
+            # User is back: a temporary manual placement ends and automatic
+            # movement resumes (only if Automatic Movement is enabled).
             self._cat.set_manual(False, announce=False)
         self._cat.clear_auto_hold()
         self._reposition("state")
@@ -201,6 +208,11 @@ class CodingCatApp:
             log.info("Auto-move → %s  (%s, trigger=%s)", zone, state.value, trigger)
 
     def _set_auto_move(self, enabled: bool) -> None:
+        """Right-click menu toggle = the Automatic Movement setting."""
+        cfg = self._settings_mgr.settings
+        if cfg.auto_move != enabled:
+            cfg.auto_move = enabled
+            self._settings_mgr.save()
         self._cat.set_manual(not enabled)
         if enabled:
             self._reposition("menu")
@@ -268,16 +280,18 @@ class CodingCatApp:
 
     def _open_settings(self) -> None:
         cfg = self._settings_mgr.settings
-        dlg = SettingsDialog(cfg, auto_move=not self._cat.is_manual,
+        was_auto = cfg.auto_move
+        dlg = SettingsDialog(cfg, auto_move=was_auto,
                              on_play_animation=self._play_animation)
         if dlg.exec():
+            cfg.auto_move = dlg.auto_move
             self._settings_mgr.save()
             self._cat.set_fps(cfg.fps)
             self._cat.set_display_size(cfg.display_size)
             self._cat.set_always_on_top(cfg.always_on_top)
             self._prod_mgr.set_pomodoro_times(cfg.pomodoro_work_mins, cfg.pomodoro_break_mins)
             self._prod_mgr.set_sleep_after(cfg.sleep_after_secs)
-            if dlg.auto_move == self._cat.is_manual:
+            if dlg.auto_move != was_auto:
                 self._cat.set_manual(not dlg.auto_move)
             self._reposition("settings")          # movement keywords may have changed
             log.info("Settings applied")
@@ -297,7 +311,7 @@ class CodingCatApp:
         pic = self._anim_mgr.pixmap("idle", 0)
         pic = pic.scaledToHeight(round(84 * pic.devicePixelRatio()),
                                  Qt.TransformationMode.SmoothTransformation)
-        self._intro = IntroDialog(pic)
+        self._intro = IntroDialog(pic, break_after_secs=self._settings_mgr.settings.sleep_after_secs)
         self._intro.finished.connect(self._on_intro_closed)
         self._intro.show()
 

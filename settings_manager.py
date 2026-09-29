@@ -30,6 +30,7 @@ class Settings:
     always_on_top: bool = True
     sleep_after_secs: int = DEFAULT_SLEEP_AFTER_SECS
     show_intro: bool = True                 # first-launch introduction window
+    auto_move: bool = True                  # Automatic Movement (default ON)
     move_code: str = DEFAULT_MOVEMENT["code"]    # movement keyword while coding
     move_idle: str = DEFAULT_MOVEMENT["idle"]    # ...while idle
     move_break: str = DEFAULT_MOVEMENT["break"]  # ...on a Pomodoro break
@@ -52,10 +53,17 @@ def _int(key: str, default: int, lo: int, hi: int) -> int:
     return min(max(value, lo), hi)
 
 
+# Bump when a stored default must be migrated once.
+#   2: "break after inactivity" default changed 120 s → 10 s
+SETTINGS_VERSION = 2
+
+
 class SettingsManager:
     def __init__(self) -> None:
         self.settings = Settings()
         self.load()
+        if self._migrated:
+            self.save()
 
     def load(self) -> None:
         s = self.settings
@@ -71,6 +79,12 @@ class SettingsManager:
         s.sleep_after_secs    = _int("sleep_after", s.sleep_after_secs,
                                      MIN_SLEEP_AFTER_SECS, MAX_SLEEP_AFTER_SECS)
         s.show_intro          = str(get_setting("show_intro", "1")) == "1"
+        s.auto_move           = str(get_setting("auto_move", "1")) == "1"
+        self._migrated = False
+        if _int("settings_version", 0, 0, 1 << 30) < 2:
+            # Older builds auto-saved the old 120 s default; move to 10 s once.
+            s.sleep_after_secs = DEFAULT_SLEEP_AFTER_SECS
+            self._migrated = True
         s.move_code           = _choice("move_code", "code")
         s.move_idle           = _choice("move_idle", "idle")
         s.move_break          = _choice("move_break", "break")
@@ -87,6 +101,8 @@ class SettingsManager:
         set_setting("always_on_top", "1" if s.always_on_top else "0")
         set_setting("sleep_after", s.sleep_after_secs)
         set_setting("show_intro", "1" if s.show_intro else "0")
+        set_setting("auto_move", "1" if s.auto_move else "0")
+        set_setting("settings_version", SETTINGS_VERSION)
         set_setting("move_code",  s.move_code)
         set_setting("move_idle",  s.move_idle)
         set_setting("move_break", s.move_break)

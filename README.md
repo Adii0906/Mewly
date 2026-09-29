@@ -148,7 +148,9 @@ python tools/build_sprites.py
 
 By default Mewly positions itself based on what you're doing: beside your
 editor while you code, in the center when you're idle or on a break, and it
-stays put while asleep. See [BEHAVIOR_SYSTEM.md](BEHAVIOR_SYSTEM.md).
+stays put while it takes a break. If you're away for 10 seconds, Mewly takes a
+little break too (break animation, movement pauses) and wakes up as soon as
+you use your computer again. See [BEHAVIOR_SYSTEM.md](BEHAVIOR_SYSTEM.md).
 
 On first launch a small introduction window explains the basics. Tick
 **Don't show this again** to skip it on future launches. You can reopen it
@@ -165,10 +167,10 @@ Available options:
 - Cat Size (sprite height in pixels)
 - Animation FPS (overall speed; 8 = as designed)
 - Always On Top
-- Sleep After (seconds of inactivity)
+- Break After (seconds of inactivity before Mewly takes a break; default 10)
 - Animation: pick any of Mewly's animations (jump, heart, task done, debug,
   wake up) and play it on the cat
-- Movement: Auto-move on/off, and a movement keyword per activity
+- Movement: Automatic Movement on/off (default on, remembered), and a movement keyword per activity
   (coding: beside my window / left / center / right / stay; idle and break:
   center / left / right / stay)
 - Pomodoro Work Duration

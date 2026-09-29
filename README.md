@@ -37,7 +37,7 @@ Whether you're coding, debugging, taking a break, or away from your keyboard, Me
 | Focus | Sustained fast typing in the IDE |
 | Sleep | No keyboard/mouse input for a while (configurable) |
 | Wake | Plays when you come back |
-| Walk | Only when you ask (menu, arrow keys) — never random |
+| Walk | Auto-positioning on activity changes, or when you ask — never random |
 | Jump / Heart | Click / double-click reactions |
 | Task / Debug | Menu or tray actions |
 | Break | Pomodoro break |
@@ -127,9 +127,15 @@ python tools/build_sprites.py
 | Left Click | Jump + meow (wakes a sleeping cat) |
 | Double Click | Heart reaction |
 | Right Click | Open context menu |
+| Right Drag | Place Mewly yourself (manual mode: it stays there) |
 | Drag | Move Mewly anywhere (dropped half off-screen → walks back) |
-| ← / → | Walk left / right (click the cat first) |
-| Walk to… | Walk to the left edge, center or right edge |
+| ← / → | Walk left / right (click the cat first; manual mode) |
+| Walk to… | Walk to the left edge, center or right edge (manual mode) |
+| Auto-move | Toggle automatic positioning (on by default) |
+
+By default Mewly positions itself based on what you're doing: beside your
+editor while you code, in the center when you're idle or on a break, and it
+stays put while asleep. See [BEHAVIOR_SYSTEM.md](BEHAVIOR_SYSTEM.md).
 | Start Pomodoro | Begin work session |
 | Task Completed | Play task animation |
 | Debug Mode | Play debug animation |

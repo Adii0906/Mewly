@@ -58,6 +58,10 @@ class MovementManager:
         return self._target_x is not None
 
     @property
+    def target_x(self) -> Optional[float]:
+        return self._target_x
+
+    @property
     def facing_left(self) -> bool:
         return self._facing_left
 

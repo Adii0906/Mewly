@@ -96,6 +96,9 @@ ONESHOT_PRIORITY: Dict[str, int] = {
 WALK_SPEED_PX_PER_SEC: float = 110.0   # at the default display size
 WALK_STEP_PX:          int   = 160     # arrow-key walk distance (default size)
 EDGE_MARGIN:           int   = 4
+# Automatic positioning: a new foreground window must stay active this long
+# before the cat repositions for it.
+WINDOW_SETTLE_MS:      int   = 2500
 
 # ── Timing ────────────────────────────────────────────────────────────────────
 MOVE_TICK_MS:      int = 16     # master timer while walking / fading text

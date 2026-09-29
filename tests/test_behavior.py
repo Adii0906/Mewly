@@ -17,6 +17,7 @@ from config import (                                                   # noqa: E
     ANIMATIONS, AnimSpec, CODE_GRACE_SECS, FOCUS_MIN_CODE_SECS, MIN_STATE_DWELL_SECS,
 )
 from state_manager import ActivityClassifier, ActivitySample, CatBehavior, CatState  # noqa: E402
+from positioning import CENTER, LEFT, RIGHT, target_zone, zone_of, zone_target  # noqa: E402
 
 
 class AnimationPlayerTest(unittest.TestCase):
@@ -179,6 +180,36 @@ class BehaviorTest(unittest.TestCase):
         self.assertEqual(self.b.animation(), "walk")
         self.b.set_walking(False)
         self.assertEqual(self.shown, ["walk", "jump", "walk", "idle"])
+
+
+class PositioningTest(unittest.TestCase):
+    WORK = (0, 0, 1920, 1040)
+
+    def test_zones_are_thirds(self) -> None:
+        self.assertEqual(zone_of(0, 0, 900), LEFT)
+        self.assertEqual(zone_of(450, 0, 900), CENTER)
+        self.assertEqual(zone_of(900, 0, 900), RIGHT)
+        self.assertEqual(zone_target(CENTER, 100, 900), 500)
+
+    def test_state_targets(self) -> None:
+        self.assertIsNone(target_zone(CatState.SLEEP, None, None))      # sleeping: stay put
+        self.assertEqual(target_zone(CatState.IDLE, None, None), CENTER)
+        self.assertEqual(target_zone(CatState.BREAK, None, None), CENTER)
+        self.assertEqual(target_zone(CatState.CODE, None, None), RIGHT)  # no window info
+
+    def test_code_sits_beside_the_active_window(self) -> None:
+        # Editor docked on the left half → free space on the right.
+        self.assertEqual(target_zone(CatState.CODE, (0, 0, 960, 1040), self.WORK), RIGHT)
+        # Editor docked on the right half → free space on the left.
+        self.assertEqual(target_zone(CatState.FOCUS, (960, 0, 1920, 1040), self.WORK), LEFT)
+        # Maximized editor → no room anywhere → right corner.
+        self.assertEqual(target_zone(CatState.CODE, (0, 0, 1920, 1040), self.WORK), RIGHT)
+        # Window on another monitor → default.
+        self.assertEqual(target_zone(CatState.CODE, (2000, 0, 3000, 900), self.WORK), RIGHT)
+
+    def test_deterministic(self) -> None:
+        results = {target_zone(CatState.FOCUS, (700, 0, 1920, 1040), self.WORK) for _ in range(50)}
+        self.assertEqual(results, {LEFT})
 
 
 class ScenarioTest(unittest.TestCase):

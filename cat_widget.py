@@ -34,6 +34,7 @@ from config import (
     MAX_IDLE_TICK_MS, MOVE_TICK_MS, WALK_SPEED_PX_PER_SEC, WALK_STEP_PX,
 )
 from movement_manager import MovementManager
+from positioning import zone_of, zone_target
 from state_manager import CatBehavior, CatState
 
 log = logging.getLogger("Mewly.widget")
@@ -52,6 +53,7 @@ class CatWidget(QWidget):
     right_clicked = pyqtSignal(QPoint)
     exit_requested = pyqtSignal()
     user_interacted = pyqtSignal()        # click on the cat counts as user activity
+    manual_mode_changed = pyqtSignal(bool)  # True = user controls the position
 
     def __init__(
         self,
@@ -72,11 +74,16 @@ class CatWidget(QWidget):
         self._press_pos: Optional[QPoint] = None
         self._drag_offset: Optional[QPoint] = None
         self._dragging = False
+        self._drag_button = Qt.MouseButton.NoButton
         self._suppress_release = False
         self._click_timer = QTimer(self)
         self._click_timer.setSingleShot(True)
         self._click_timer.timeout.connect(self._on_single_click)
         self._click_count = 0
+
+        # positioning mode: automatic (default) or manual (user-controlled)
+        self._manual = False
+        self._auto_hold = False        # left-drag placement: keep it until the next state change
 
         # overlays
         self._bubble_text = ""
@@ -135,9 +142,49 @@ class CatWidget(QWidget):
         self._kick()
 
     def walk_to_edge(self, where: str) -> None:
+        """Right-click menu "Walk to…": a manual placement."""
+        self.set_manual(True, announce=False)
         lo, hi = self._move.bounds()
-        target = {"left": lo, "right": hi}.get(where, (lo + hi) / 2)
+        self._start_walk(zone_target(where, lo, hi))
+
+    # ── automatic / manual positioning ────────────────────────────
+
+    @property
+    def is_manual(self) -> bool:
+        return self._manual
+
+    @property
+    def auto_hold(self) -> bool:
+        return self._auto_hold
+
+    def clear_auto_hold(self) -> None:
+        self._auto_hold = False
+
+    def set_manual(self, manual: bool, announce: bool = True) -> None:
+        if manual == self._manual:
+            return
+        self._manual = manual
+        self._auto_hold = False
+        if manual and self._move.is_walking:      # an automatic walk must not continue
+            self._move.stop()
+            self._behavior.set_walking(False)
+        if announce:
+            self.show_reaction("🖐 Manual" if manual else "🐾 Auto-move")
+        self.manual_mode_changed.emit(manual)
+
+    def auto_move(self, zone: str) -> bool:
+        """Automatic mode: walk to *zone* ("left"/"center"/"right") if not already there."""
+        if self._manual or self._dragging:
+            return False
+        lo, hi = self._move.bounds()
+        target = zone_target(zone, lo, hi)
+        if self._move.is_walking:
+            if abs(self._move.target_x - target) < 1:
+                return False
+        elif zone_of(self._move.x, lo, hi) == zone:
+            return False                          # already in the right place
         self._start_walk(target)
+        return True
 
     def on_animation_changed(self, name: str) -> None:
         """CatBehavior callback: the desired animation changed."""
@@ -206,15 +253,15 @@ class CatWidget(QWidget):
     # ── mouse / keyboard ─────────────────────────────────────────
 
     def mousePressEvent(self, e: QMouseEvent) -> None:
-        if e.button() == Qt.MouseButton.LeftButton:
+        # Left: click / drag as before.  Right: click = menu, drag = manual placement.
+        if e.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
             self._press_pos = e.globalPosition().toPoint()
             self._drag_offset = e.position().toPoint()
             self._dragging = False
-        elif e.button() == Qt.MouseButton.RightButton:
-            self.right_clicked.emit(e.globalPosition().toPoint())
+            self._drag_button = e.button()
 
     def mouseMoveEvent(self, e: QMouseEvent) -> None:
-        if self._press_pos is None or not (e.buttons() & Qt.MouseButton.LeftButton):
+        if self._press_pos is None or not (e.buttons() & self._drag_button):
             return
         gpos = e.globalPosition().toPoint()
         if not self._dragging and (gpos - self._press_pos).manhattanLength() >= _DRAG_THRESHOLD:
@@ -228,12 +275,22 @@ class CatWidget(QWidget):
             self.move_to(new.x(), new.y())
 
     def mouseReleaseEvent(self, e: QMouseEvent) -> None:
-        if e.button() != Qt.MouseButton.LeftButton:
+        if e.button() != self._drag_button:
             return
         was_dragging = self._dragging
         self._press_pos = None
         self._dragging = False
+        self._drag_button = Qt.MouseButton.NoButton
+        if e.button() == Qt.MouseButton.RightButton:
+            if was_dragging:
+                self.set_manual(True)             # right-drag: the user places the cat
+                self._after_drop()
+            else:
+                self.right_clicked.emit(e.globalPosition().toPoint())
+            return
         if was_dragging:
+            if not self._manual:
+                self._auto_hold = True            # keep this spot until the next state change
             self._after_drop()
         elif self._suppress_release:
             self._suppress_release = False
@@ -247,6 +304,8 @@ class CatWidget(QWidget):
         self._click_timer.stop()
         self._suppress_release = True
         self._press_pos = None
+        # The double-click replaces the second press; route its release here.
+        self._drag_button = Qt.MouseButton.LeftButton
         was_asleep = self._behavior.base == CatState.SLEEP
         self.user_interacted.emit()
         if not was_asleep:
@@ -264,6 +323,7 @@ class CatWidget(QWidget):
             self.exit_requested.emit()
             return
         if key in (Qt.Key.Key_Left, Qt.Key.Key_Right):
+            self.set_manual(True, announce=False)
             step = WALK_STEP_PX * self._scale()
             base = self._move.x
             self._start_walk(base - step if key == Qt.Key.Key_Left else base + step)
@@ -350,7 +410,8 @@ class CatWidget(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
-        self.setToolTip("Click: meow · Double-click: ♥ · Drag: move · ←/→: walk · Right-click: menu")
+        self.setToolTip("Click: meow · Double-click: ♥ · Drag: move · "
+                        "Right-drag: place (manual) · Right-click: menu")
 
     def _apply_size(self) -> None:
         self._bubble_h = max(14, round(self._anim.sprite_height * BUBBLE_HEIGHT_RATIO))

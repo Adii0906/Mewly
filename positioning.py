@@ -10,13 +10,16 @@ when it is not already in the target third, so it never moves without need.
     CODE, FOCUS    → beside the active window, on the side with more free
                      screen space; if the window fills the screen → right
 
+(Those are the defaults; Settings → Movement can map each activity to a
+different keyword, see DEFAULT_MOVEMENT.)
+
 It is re-evaluated only on a clear trigger: a base-state change, or a switch
 of the foreground window (see main.py).  No randomness, no timers of its own.
 """
 from __future__ import annotations
 
 import sys
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from state_manager import CatState
 
@@ -45,13 +48,33 @@ def zone_target(zone: str, lo: float, hi: float) -> float:
     return {LEFT: lo, RIGHT: hi}.get(zone, (lo + hi) / 2)
 
 
-def target_zone(state: CatState, fg_rect: Optional[Rect], work_rect: Optional[Rect]) -> Optional[str]:
+BESIDE, STAY = "beside", "stay"
+
+# Movement keywords per activity (user-customisable in Settings).
+#   "left" / "center" / "right" → that third of the screen
+#   "beside"                    → next to the active window (coding only)
+#   "stay"                      → don't move
+DEFAULT_MOVEMENT = {"code": BESIDE, "idle": CENTER, "break": CENTER}
+MOVEMENT_CHOICES = {
+    "code":  (BESIDE, LEFT, CENTER, RIGHT, STAY),
+    "idle":  (CENTER, LEFT, RIGHT, STAY),
+    "break": (CENTER, LEFT, RIGHT, STAY),
+}
+
+
+def target_zone(state: CatState, fg_rect: Optional[Rect], work_rect: Optional[Rect],
+                movement: Optional[Dict[str, str]] = None) -> Optional[str]:
     """Where the cat belongs for *state*; None = stay put."""
     if state == CatState.SLEEP:
         return None
-    if state in (CatState.IDLE, CatState.BREAK):
-        return CENTER
-    # CODE / FOCUS: don't sit on top of the work — go beside the active window.
+    prefs = {**DEFAULT_MOVEMENT, **(movement or {})}
+    key = {CatState.IDLE: "idle", CatState.BREAK: "break"}.get(state, "code")
+    choice = prefs[key] if prefs[key] in MOVEMENT_CHOICES[key] else DEFAULT_MOVEMENT[key]
+    if choice == STAY:
+        return None
+    if choice in (LEFT, CENTER, RIGHT):
+        return choice
+    # "beside" (CODE / FOCUS): don't sit on top of the work — go beside the active window.
     if fg_rect and work_rect:
         wl, _, wr, _ = work_rect
         fl, _, fr, _ = fg_rect

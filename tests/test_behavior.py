@@ -207,6 +207,21 @@ class PositioningTest(unittest.TestCase):
         # Window on another monitor → default.
         self.assertEqual(target_zone(CatState.CODE, (2000, 0, 3000, 900), self.WORK), RIGHT)
 
+    def test_movement_keywords(self) -> None:
+        editor_left = (0, 0, 960, 1040)
+        # Defaults = the built-in behaviour.
+        self.assertEqual(target_zone(CatState.CODE, editor_left, self.WORK, {}), RIGHT)
+        self.assertEqual(target_zone(CatState.IDLE, None, None, {}), CENTER)
+        # Custom keywords per activity.
+        prefs = {"code": "left", "idle": "right", "break": "stay"}
+        self.assertEqual(target_zone(CatState.FOCUS, editor_left, self.WORK, prefs), LEFT)
+        self.assertEqual(target_zone(CatState.IDLE, None, None, prefs), RIGHT)
+        self.assertIsNone(target_zone(CatState.BREAK, None, None, prefs))
+        self.assertIsNone(target_zone(CatState.SLEEP, None, None, prefs))   # sleep always stays
+        # Unknown / invalid keywords fall back to the default.
+        self.assertEqual(target_zone(CatState.IDLE, None, None, {"idle": "beside"}), CENTER)
+        self.assertEqual(target_zone(CatState.IDLE, None, None, {"idle": "bogus"}), CENTER)
+
     def test_deterministic(self) -> None:
         results = {target_zone(CatState.FOCUS, (700, 0, 1920, 1040), self.WORK) for _ in range(50)}
         self.assertEqual(results, {LEFT})

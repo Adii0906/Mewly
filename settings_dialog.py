@@ -3,10 +3,12 @@ CodingCat - Settings Dialog
 PyQt6 dialog for adjusting FPS, display size, Pomodoro durations.
 """
 from __future__ import annotations
+from typing import Callable, Optional
+
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QSlider, QSpinBox, QPushButton, QGroupBox,
-    QCheckBox, QFormLayout, QSizePolicy,
+    QCheckBox, QFormLayout, QSizePolicy, QComboBox,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -14,13 +16,39 @@ from config import (
     MIN_FPS, MAX_FPS, MIN_DISPLAY_SIZE, MAX_DISPLAY_SIZE,
     MIN_SLEEP_AFTER_SECS, MAX_SLEEP_AFTER_SECS,
 )
+from positioning import MOVEMENT_CHOICES
 from settings_manager import Settings
+
+# Animations the user can pick and play on the cat (name → label).
+PREVIEW_ANIMATIONS = {
+    "jump":  "Jump",
+    "heart": "Heart",
+    "task":  "Task done",
+    "debug": "Debug",
+    "wake":  "Wake up",
+}
+
+_MOVEMENT_LABELS = {
+    "beside": "Beside my window",
+    "left":   "Left",
+    "center": "Center",
+    "right":  "Right",
+    "stay":   "Stay where it is",
+}
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, settings: Settings, parent=None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        parent=None,
+        auto_move: bool = True,
+        on_play_animation: Optional[Callable[[str], None]] = None,
+    ) -> None:
         super().__init__(parent)
         self.settings = settings
+        self.auto_move = auto_move
+        self._on_play_animation = on_play_animation
         self.setWindowTitle("Mewly ⚙ Settings")
         self.setMinimumWidth(380)
         self.setStyleSheet("""
@@ -40,6 +68,10 @@ class SettingsDialog(QDialog):
             QSlider::handle:horizontal { background:#89b4fa; width:14px; height:14px;
                                          border-radius:7px; margin:-4px 0; }
             QCheckBox { color:#cdd6f4; }
+            QComboBox { background:#313244; color:#cdd6f4; border:1px solid #45475a;
+                        border-radius:4px; padding:2px 6px; }
+            QComboBox QAbstractItemView { background:#313244; color:#cdd6f4;
+                                          selection-background-color:#45475a; }
         """)
         self._build()
 
@@ -85,6 +117,42 @@ class SettingsDialog(QDialog):
         bform.addRow("Sleep after:", self.sleep_spin)
         layout.addWidget(beh_group)
 
+        # ── Animation ────────────────────────────────────────────
+        anim_group = QGroupBox("Animation")
+        arow = QHBoxLayout(anim_group)
+        self.anim_combo = QComboBox()
+        for name, label in PREVIEW_ANIMATIONS.items():
+            self.anim_combo.addItem(label, name)
+        arow.addWidget(QLabel("Play:"))
+        arow.addWidget(self.anim_combo, 1)
+        play_btn = QPushButton("▶")
+        play_btn.setToolTip("Play the chosen animation on Mewly")
+        play_btn.clicked.connect(self._play_animation)
+        play_btn.setEnabled(self._on_play_animation is not None)
+        arow.addWidget(play_btn)
+        layout.addWidget(anim_group)
+
+        # ── Movement ─────────────────────────────────────────────
+        move_group = QGroupBox("🐾  Movement")
+        mform = QFormLayout(move_group)
+        self.auto_check = QCheckBox("Auto-move (follows your activity)")
+        self.auto_check.setChecked(self.auto_move)
+        self.auto_check.setToolTip("Off = manual: Mewly stays where you put it (right-drag)")
+        mform.addRow("", self.auto_check)
+        self.move_combos = {}
+        current = self.settings.movement
+        for activity, label in (("code", "When coding:"), ("idle", "When idle:"),
+                                ("break", "On a break:")):
+            combo = QComboBox()
+            for keyword in MOVEMENT_CHOICES[activity]:
+                combo.addItem(_MOVEMENT_LABELS[keyword], keyword)
+            combo.setCurrentIndex(max(0, combo.findData(current[activity])))
+            self.move_combos[activity] = combo
+            mform.addRow(label, combo)
+        self.auto_check.toggled.connect(self._update_movement_enabled)
+        self._update_movement_enabled(self.auto_check.isChecked())
+        layout.addWidget(move_group)
+
         # ── Pomodoro ─────────────────────────────────────────────
         pomo_group = QGroupBox("🍅  Pomodoro")
         pform = QFormLayout(pomo_group)
@@ -119,4 +187,16 @@ class SettingsDialog(QDialog):
         self.settings.pomodoro_work_mins  = self.work_spin.value()
         self.settings.pomodoro_break_mins = self.break_spin.value()
         self.settings.sleep_after_secs    = self.sleep_spin.value()
+        self.settings.move_code  = self.move_combos["code"].currentData()
+        self.settings.move_idle  = self.move_combos["idle"].currentData()
+        self.settings.move_break = self.move_combos["break"].currentData()
+        self.auto_move = self.auto_check.isChecked()
         self.accept()
+
+    def _play_animation(self) -> None:
+        if self._on_play_animation is not None:
+            self._on_play_animation(self.anim_combo.currentData())
+
+    def _update_movement_enabled(self, auto: bool) -> None:
+        for combo in self.move_combos.values():
+            combo.setEnabled(auto)

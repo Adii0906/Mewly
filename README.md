@@ -132,15 +132,21 @@ python tools/build_sprites.py
 | ← / → | Walk left / right (click the cat first; manual mode) |
 | Walk to… | Walk to the left edge, center or right edge (manual mode) |
 | Auto-move | Toggle automatic positioning (on by default) |
-
-By default Mewly positions itself based on what you're doing: beside your
-editor while you code, in the center when you're idle or on a break, and it
-stays put while asleep. See [BEHAVIOR_SYSTEM.md](BEHAVIOR_SYSTEM.md).
 | Start Pomodoro | Begin work session |
 | Task Completed | Play task animation |
 | Debug Mode | Play debug animation |
 | Settings | Open settings |
+| How Mewly works | Show the introduction window again |
+| Esc | Close Mewly (click the cat first) |
 | Exit | Save position and quit |
+
+By default Mewly positions itself based on what you're doing: beside your
+editor while you code, in the center when you're idle or on a break, and it
+stays put while asleep. See [BEHAVIOR_SYSTEM.md](BEHAVIOR_SYSTEM.md).
+
+On first launch a small introduction window explains the basics. Tick
+**Don't show this again** to skip it on future launches. You can reopen it
+any time from the right-click menu (**❔ How Mewly works**).
 
 ---
 
@@ -154,6 +160,11 @@ Available options:
 - Animation FPS (overall speed; 8 = as designed)
 - Always On Top
 - Sleep After (seconds of inactivity)
+- Animation: pick any of Mewly's animations (jump, heart, task done, debug,
+  wake up) and play it on the cat
+- Movement: Auto-move on/off, and a movement keyword per activity
+  (coding: beside my window / left / center / right / stay; idle and break:
+  center / left / right / stay)
 - Pomodoro Work Duration
 - Pomodoro Break Duration
 

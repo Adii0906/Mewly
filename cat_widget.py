@@ -172,6 +172,12 @@ class CatWidget(QWidget):
             self.show_reaction("🖐 Manual" if manual else "🐾 Auto-move")
         self.manual_mode_changed.emit(manual)
 
+    def pause_auto_walk(self) -> None:
+        """Stop an automatic walk (the user went away); manual walks finish."""
+        if not self._manual and self._move.is_walking:
+            self._move.stop()
+            self._behavior.set_walking(False)
+
     def auto_move(self, zone: str) -> bool:
         """Automatic mode: walk to *zone* ("left"/"center"/"right") if not already there."""
         if self._manual or self._dragging:

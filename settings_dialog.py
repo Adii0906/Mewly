@@ -124,8 +124,8 @@ class SettingsDialog(QDialog):
         self.sleep_spin.setSingleStep(15)
         self.sleep_spin.setSuffix(" s")
         self.sleep_spin.setValue(self.settings.sleep_after_secs)
-        self.sleep_spin.setToolTip("No keyboard/mouse input for this long → the cat falls asleep")
-        bform.addRow("Sleep after:", self.sleep_spin)
+        self.sleep_spin.setToolTip("No keyboard/mouse input for this long → Mewly takes a break")
+        bform.addRow("Break after:", self.sleep_spin)
         left.addWidget(beh_group)
 
         # ── Pomodoro (left) ──────────────────────────────────────
@@ -147,10 +147,14 @@ class SettingsDialog(QDialog):
         # ── Movement (right) ─────────────────────────────────────
         move_group = QGroupBox("🐾  Movement")
         mform = self._form(move_group)
-        self.auto_check = QCheckBox("Auto-move (follows your activity)")
+        self.auto_check = QCheckBox("Automatic Movement")
         self.auto_check.setChecked(self.auto_move)
-        self.auto_check.setToolTip("Off = manual: Mewly stays where you put it (right-drag)")
+        self.auto_check.setToolTip("On by default: Mewly moves on its own based on your activity")
         mform.addRow(self.auto_check)
+        self.auto_hint = QLabel()
+        self.auto_hint.setWordWrap(True)
+        self.auto_hint.setStyleSheet("color:#a6adc8; font-size:11px;")
+        mform.addRow(self.auto_hint)
         self.move_combos = {}
         current = self.settings.movement
         for activity, label in (("code", "When coding:"), ("idle", "When idle:"),
@@ -252,3 +256,9 @@ class SettingsDialog(QDialog):
     def _update_movement_enabled(self, auto: bool) -> None:
         for combo in self.move_combos.values():
             combo.setEnabled(auto)
+        self.auto_hint.setText(
+            "Mewly moves left, right or to the center based on your activity."
+            if auto else
+            "Automatic movement disabled. Manual / keyword movement remains "
+            "available: right-drag, or right-click → Walk to… Left / Center / Right."
+        )

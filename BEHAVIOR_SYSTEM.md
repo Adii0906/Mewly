@@ -24,7 +24,7 @@ something you did to the cat, or a Pomodoro event.
 | **IDLE**  | You're present (mouse/keyboard) but not typing in an IDE | `idle` loop |
 | **CODE**  | ≥ 4 keystrokes within 6 s while VS Code / Cursor / Windsurf is the **foreground** window | `code` loop |
 | **FOCUS** | In CODE for ≥ 45 s *and* ≥ 150 coding keystrokes in the last minute | `focus` loop |
-| **SLEEP** | No keyboard **or** mouse input for *Sleep after* seconds (default 120, Settings) | `sleep` loop |
+| **SLEEP** (away / break) | No keyboard **or** mouse input for *Break after* seconds (default **10**, Settings) | `break` loop (`assets/sprites/break.png`); movement pauses |
 | **BREAK** | Pomodoro break phase | `break` loop |
 
 ```
@@ -34,7 +34,7 @@ something you did to the cat, or a Pomodoro event.
     │   20 s after the last │      < 70 keys/min              │
     │   coding keystroke    │                                 │
     │                       └──────────► IDLE ◄───────────────┘
-    │  no input for "Sleep after"
+    │  no input for "Break after" (10 s)
     ▼
   SLEEP ── any input ──► WAKE (one-shot) ──► IDLE / CODE
 ```
@@ -62,7 +62,7 @@ higher-priority one.
 |---|---|---|
 | 5 | `task`  | "Task Done" (menu / tray) |
 | 4 | `debug` | "Debug Mode" (menu / tray) |
-| 3 | `wake`  | Leaving SLEEP (sleep → yawn/stretch → sit up) |
+| 3 | `wake`  | Leaving SLEEP (dozing → yawn/stretch → sit up) |
 | 2 | `heart` | Double-click (with floating hearts) |
 | 1 | `jump`  | Single click; Pomodoro work start / break end |
 
@@ -109,10 +109,25 @@ until the next base-state change (window switches are ignored until then).
   stays exactly where you put it.
 - **Right-click → 📍 Walk to… ▸ Left edge / Center / Right edge** walks there
   and switches to manual mode. The **← / →** keys work the same way.
-- **Right-click → 🐾 Auto-move** toggles between automatic and manual mode.
+- **Right-click → 🐾 Auto-move** and **Settings → Movement → Automatic
+  Movement** switch the saved *Automatic Movement* setting (default **ON**).
 
-Manual mode lasts until you turn Auto-move back on, or until the cat wakes up
-after SLEEP (you were away), when automatic positioning resumes.
+With Automatic Movement **ON**, a right-drag / Walk to… placement is temporary:
+it lasts until you turn Auto-move back on, or until Mewly wakes up after a
+break (you were away), when automatic positioning resumes.
+
+With Automatic Movement **OFF**, Mewly starts in manual mode and never
+repositions itself; right-drag and the keyword moves (Walk to… Left / Center /
+Right, ← / →) keep working.
+
+### Away → break → wake
+
+```
+active ─(no input for 10 s)─► SLEEP: break animation, automatic walk stopped
+       ◄──── WAKE one-shot ◄── any keyboard/mouse input (checked every 1 s)
+                  │
+                  └─► state change → automatic movement resumes
+```
 
 ### Walking details
 
@@ -150,7 +165,7 @@ scales every animation's authored speed (8 = as designed):
 | idle | 4 | loop |
 | code | 5 | loop |
 | focus | 6 | loop |
-| sleep | 2 | loop |
+| sleep | 2 | loop (not used by the away state any more; kept for previews) |
 | break | 0.8 | loop |
 | walk | 8 | loop |
 | jump | 8 | one-shot |

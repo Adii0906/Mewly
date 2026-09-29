@@ -28,11 +28,21 @@ _STYLE = """
 """
 
 _HOW_IT_WORKS = (
-    "Mewly moves around on its own, based on what you're doing.",
-    "It sits left, right or in the center depending on your activity.",
-    "It reacts when you click it, and naps when you're away.",
-    "Right-click to take control of where it sits.",
-    "Size, animation speed and movement can be changed in Settings.",
+    "Mewly reacts to your clicks and to what you're doing.",
+    "Size, animations and movement can be changed in Settings.",
+)
+
+_HOW_IT_MOVES = (
+    "Mewly moves <b>automatically</b> by default. It watches your activity and "
+    "moves left, right or to the center based on what you're doing."
+    "<br><span style='color:#a6adc8'>Prefer to be in control? Turn off "
+    "<b>Automatic Movement</b> in Settings and move Mewly yourself (right-drag "
+    "or Walk to… Left / Center / Right).</span>"
+)
+
+_TAKING_A_BREAK = (
+    "If you're away for {secs} seconds, Mewly takes a little break too. "
+    "Start using your computer again and he'll wake up and get back to work. 🐈‍⬛"
 )
 
 _CONTROLS = (
@@ -43,8 +53,10 @@ _CONTROLS = (
 
 
 class IntroDialog(QDialog):
-    def __init__(self, cat_pixmap: Optional[QPixmap] = None, parent=None) -> None:
+    def __init__(self, cat_pixmap: Optional[QPixmap] = None, parent=None,
+                 break_after_secs: int = 10) -> None:
         super().__init__(parent)
+        self._break_after_secs = break_after_secs
         self.setWindowTitle("Meet Mewly")
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
@@ -91,6 +103,12 @@ class IntroDialog(QDialog):
         items.setWordWrap(True)
         root.addWidget(items)
 
+        # ── how Mewly moves / taking a break ────────────────────
+        root.addWidget(self._section("🐾  How Mewly moves"))
+        root.addWidget(self._paragraph(_HOW_IT_MOVES))
+        root.addWidget(self._section("💤  Taking a break?"))
+        root.addWidget(self._paragraph(_TAKING_A_BREAK.format(secs=self._break_after_secs)))
+
         # ── controls ─────────────────────────────────────────────
         root.addWidget(self._section("Controls"))
         for key, what in _CONTROLS:
@@ -117,6 +135,13 @@ class IntroDialog(QDialog):
         ok.clicked.connect(self.accept)
         footer.addWidget(ok)
         root.addLayout(footer)
+
+    @staticmethod
+    def _paragraph(html: str) -> QLabel:
+        label = QLabel(html)
+        label.setTextFormat(Qt.TextFormat.RichText)
+        label.setWordWrap(True)
+        return label
 
     @staticmethod
     def _section(text: str) -> QLabel:

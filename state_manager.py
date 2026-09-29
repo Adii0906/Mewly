@@ -31,7 +31,7 @@ from typing import Callable, Optional, Sequence
 from config import (
     CODE_ENTER_KEYS, CODE_ENTER_WINDOW, CODE_GRACE_SECS,
     FOCUS_ENTER_KPM, FOCUS_EXIT_KPM, FOCUS_MIN_CODE_SECS,
-    MIN_STATE_DWELL_SECS, DEFAULT_SLEEP_AFTER_SECS, ONESHOT_PRIORITY,
+    MIN_STATE_DWELL_SECS, DEFAULT_SLEEP_AFTER_SECS, ONESHOT_PRIORITY, AWAY_ANIMATION,
 )
 
 log = logging.getLogger("Mewly.state")
@@ -138,6 +138,8 @@ class CatBehavior:
             return self._oneshot
         if self._walking:
             return "walk"
+        if self._base == CatState.SLEEP:
+            return AWAY_ANIMATION          # user away → Mewly takes a break
         return self._base.value
 
     # ── events ───────────────────────────────────────────────────

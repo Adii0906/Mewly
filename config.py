@@ -78,10 +78,13 @@ ANIMATIONS: Dict[str, AnimSpec] = {
     "heart": AnimSpec((("idle", 3), ("idle", 2), ("idle", 3)), fps=3, loop=False, hold_ms=400),
     "task":  AnimSpec(_strip("task", 5), fps=3, loop=False, hold_ms=1200, flippable=False),
     "debug": AnimSpec(_strip("debug", 5), fps=4, loop=False, repeat=2, hold_ms=300, flippable=False),
-    # sleep → yawn/stretch → sit up
-    "wake":  AnimSpec((("sleep", 3), ("break", 1), ("break", 1), ("idle", 0)),
+    # dozing (last break frame) → yawn/stretch → sit up
+    "wake":  AnimSpec((("break", 4), ("break", 1), ("break", 1), ("idle", 0)),
                       fps=4, loop=False, hold_ms=150, flippable=False),
 }
+
+# Animation shown while the user is away (CatState.SLEEP): the break strip.
+AWAY_ANIMATION: str = "break"
 
 # One-shot priority: a one-shot only interrupts another of LOWER priority.
 ONESHOT_PRIORITY: Dict[str, int] = {
@@ -107,9 +110,10 @@ ACTIVITY_POLL_MS:  int = 1000   # activity sampling interval
 AUTOSAVE_MS:       int = 30_000
 
 # ── Activity classification ──────────────────────────────────────────────────
-# Default inactivity before the cat falls asleep (user-configurable).
-DEFAULT_SLEEP_AFTER_SECS: int = 120
-MIN_SLEEP_AFTER_SECS:     int = 15
+# No keyboard/mouse input for this long → the cat takes a break (the "away"
+# state, internally CatState.SLEEP).  User-configurable in Settings.
+DEFAULT_SLEEP_AFTER_SECS: int = 10
+MIN_SLEEP_AFTER_SECS:     int = 5
 MAX_SLEEP_AFTER_SECS:     int = 3600
 
 CODE_ENTER_KEYS:     int   = 4      # coding keystrokes within CODE_ENTER_WINDOW

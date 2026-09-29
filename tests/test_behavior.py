@@ -136,6 +136,13 @@ class ClassifierTest(unittest.TestCase):
         # Any input wakes immediately (no dwell for SLEEP transitions).
         self.assertEqual(c.update(self.sample(100.5, idle=0)), CatState.IDLE)
 
+    def test_default_break_after_10s_inactivity(self) -> None:
+        c = ActivityClassifier()                      # default threshold
+        self.assertEqual(c.update(self.sample(100, idle=9.0)), CatState.IDLE)
+        self.assertEqual(c.update(self.sample(101, idle=10.0)), CatState.SLEEP)
+        self.assertEqual(c.update(self.sample(102, idle=10.5)), CatState.SLEEP)   # stays, no restart
+        self.assertEqual(c.update(self.sample(103, idle=0.2)), CatState.IDLE)     # activity → wake
+
     def test_break_overrides_everything(self) -> None:
         c = ActivityClassifier(60)
         self.assertEqual(c.update(self.sample(10, idle=999, on_break=True)), CatState.BREAK)
@@ -152,7 +159,7 @@ class BehaviorTest(unittest.TestCase):
         self.b.set_base(CatState.CODE)
         self.assertEqual(self.b.animation(), "wake")
         self.b.oneshot_finished("wake")
-        self.assertEqual(self.shown, ["sleep", "wake", "code"])
+        self.assertEqual(self.shown, ["break", "wake", "code"])   # away → break strip
 
     def test_oneshot_is_not_overwritten_by_activity(self) -> None:
         self.b.trigger("task")
@@ -291,7 +298,7 @@ class ScenarioTest(unittest.TestCase):
         run(40)                                  # stop typing: FOCUS → IDLE
         self.assertEqual(beh.animation(), "idle")
         run(40)                                  # long inactivity → SLEEP
-        self.assertEqual(beh.animation(), "sleep")
+        self.assertEqual(beh.animation(), "break")      # away: Mewly takes a break
         last_input = now_ms[0] / 1000            # user comes back
         run(0.5, typing_rate=3)
         self.assertEqual(beh.animation(), "wake")
